@@ -1,6 +1,8 @@
+use std::{borrow::Cow, sync::Arc};
+
 use odbc_api::{DataType, Nullability};
-use sqlx::{Acquire, Column, Database, Executor, Row};
-use sqlx_core::{bytes::Bytes, *};
+use sqlx::{Acquire, Column, Database, Executor, Row, Statement};
+use sqlx_core::{bytes::Bytes, ext::ustr::UStr, *};
 
 #[derive(Debug)]
 pub struct ODBC;
@@ -10,7 +12,9 @@ pub struct ODBCConnection<'a>(odbc_api::Connection<'a>);
 
 pub struct ODBCRow<'a>(odbc_api::CursorRow<'a>);
 
-pub struct ODBCArguments;
+pub struct ODBCArguments<'q> {
+    pub(crate) values: Vec<SqliteArgumentValue<'q>>,
+}
 
 pub struct ODBCTransactionManager;
 
@@ -148,4 +152,39 @@ impl<'c> Executor<'c> for &'c mut ODBCConnection<'c> {
     {
         todo!()
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct ODBCStatement<'q> {
+    pub(crate) sql: Cow<'q, str>,
+    pub(crate) parameters: usize,
+    pub(crate) columns: Arc<Vec<ODBCColumn>>,
+    pub(crate) column_names: Arc<HashMap<UStr, usize>>,
+}
+
+impl<'q> Statement<'q> for ODBCStatement<'q> {
+    type Database = ODBC;
+
+    fn to_owned(&self) -> ODBCStatement<'static> {
+        ODBCStatement::<'static> {
+            sql: Cow::Owned(self.sql.clone().into_owned()),
+            parameters: self.parameters,
+            columns: Arc::clone(&self.columns),
+            column_names: Arc::clone(&self.column_names),
+        }
+    }
+
+    fn sql(&self) -> &str {
+        &self.sql
+    }
+
+    fn parameters(&self) -> Option<Either<&[DataType], usize>> {
+        Some(Either::Right(self.parameters))
+    }
+
+    fn columns(&self) -> &[ODBCColumn] {
+        &self.columns
+    }
+
+    impl_statement_query!(ODBCArguments);
 }
