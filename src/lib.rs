@@ -1,10 +1,11 @@
 use odbc_api::{DataType, Nullability};
-use sqlx::{Acquire, Column, Database, Row};
+use sqlx::{Acquire, Column, Database, Executor, Row};
 use sqlx_core::{bytes::Bytes, *};
 
 #[derive(Debug)]
 pub struct ODBC;
 
+#[derive(Debug)]
 pub struct ODBCConnection<'a>(odbc_api::Connection<'a>);
 
 pub struct ODBCRow<'a>(odbc_api::CursorRow<'a>);
@@ -100,5 +101,51 @@ impl Row for ODBCRow<'a> {
     }
 }
 
-// required because some databases have a different handling of NULL
-impl_encode_for_option!(ODBC);
+impl<'c> Executor<'c> for &'c mut ODBCConnection<'c> {
+    type Database = ODBC;
+
+    fn fetch_many<'e, 'q: 'e, E: 'q>(
+        self,
+        query: E,
+    ) -> futures_core::stream::BoxStream<
+        'e,
+        std::result::Result<
+            Either<<Self::Database as Database>::QueryResult, <Self::Database as Database>::Row>,
+            Error,
+        >,
+    >
+    where
+        'c: 'e,
+        E: executor::Execute<'q, Self::Database>,
+    {
+        todo!()
+    }
+
+    fn fetch_optional<'e, 'q: 'e, E: 'q>(
+        self,
+        query: E,
+    ) -> futures_core::future::BoxFuture<
+        'e,
+        std::result::Result<Option<<Self::Database as Database>::Row>, Error>,
+    >
+    where
+        'c: 'e,
+        E: executor::Execute<'q, Self::Database>,
+    {
+        todo!()
+    }
+
+    fn prepare_with<'e, 'q: 'e>(
+        self,
+        sql: &'q str,
+        parameters: &'e [<Self::Database as Database>::TypeInfo],
+    ) -> futures_core::future::BoxFuture<
+        'e,
+        std::result::Result<<Self::Database as database::HasStatement<'q>>::Statement, Error>,
+    >
+    where
+        'c: 'e,
+    {
+        todo!()
+    }
+}
