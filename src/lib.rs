@@ -1,8 +1,13 @@
-use std::{borrow::Cow, sync::Arc};
+use std::{borrow::Cow, fmt::Display, sync::Arc};
 
+use futures_core::future::BoxFuture;
 use odbc_api::{parameter::InputParameter, DataType};
-use sqlx::{Acquire, Arguments, Column, Database, Executor, Row, Statement, ValueRef};
+use sqlx::{
+    Acquire, Arguments, Column, Database, Describe, Executor, Row, Statement, TransactionManager,
+    TypeInfo, ValueRef,
+};
 use sqlx_core::{
+    any::AnyTransactionManager,
     database::{HasArguments, HasStatement, HasValueRef},
     ext::ustr::UStr,
     *,
@@ -27,6 +32,32 @@ pub struct ODBCArguments<'q> {
 
 pub struct ODBCTransactionManager;
 
+impl TransactionManager for ODBCTransactionManager {
+    type Database = ODBC;
+
+    fn begin(
+        conn: &mut <Self::Database as Database>::Connection,
+    ) -> BoxFuture<'_, std::result::Result<(), Error>> {
+        todo!()
+    }
+
+    fn commit(
+        conn: &mut <Self::Database as Database>::Connection,
+    ) -> BoxFuture<'_, std::result::Result<(), Error>> {
+        todo!()
+    }
+
+    fn rollback(
+        conn: &mut <Self::Database as Database>::Connection,
+    ) -> BoxFuture<'_, std::result::Result<(), Error>> {
+        todo!()
+    }
+
+    fn start_rollback(conn: &mut <Self::Database as Database>::Connection) {
+        todo!()
+    }
+}
+
 #[derive(Debug)]
 pub struct ODBCColumn {
     pub(crate) ordinal: usize,
@@ -34,8 +65,36 @@ pub struct ODBCColumn {
     pub(crate) type_info: DataType,
 }
 
+#[derive(Default)]
 pub struct ODBCQueryResult {
     pub(crate) rows_affected: u64,
+}
+
+impl Extend<ODBCQueryResult> for ODBCQueryResult {
+    fn extend<T: IntoIterator<Item = ODBCQueryResult>>(&mut self, iter: T) {
+        for elem in iter {
+            self.rows_affected += elem.rows_affected;
+        }
+    }
+}
+
+#[derive(Clone, PartialEq, Debug)]
+pub struct ODBCTypeInfo(DataType);
+
+impl Display for ODBCTypeInfo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.pad(self.name())
+    }
+}
+
+impl TypeInfo for ODBCTypeInfo {
+    fn is_null(&self) -> bool {
+        false
+    }
+
+    fn name(&self) -> &str {
+        "FIXME_TYPE_NAME"
+    }
 }
 
 impl Column for ODBCColumn {
@@ -50,7 +109,7 @@ impl Column for ODBCColumn {
     }
 
     fn type_info(&self) -> &<Self::Database as Database>::TypeInfo {
-        &self.type_info
+        &ODBCTypeInfo(self.type_info)
     }
 }
 
@@ -65,7 +124,7 @@ impl Database for ODBC {
 
     type Column = ODBCColumn;
 
-    type TypeInfo = DataType;
+    type TypeInfo = ODBCTypeInfo;
 
     type Value = ODBCValue;
 
@@ -87,7 +146,7 @@ impl<'r> ValueRef<'r> for ODBCValueRef<'r> {
 
     fn to_owned(&self) -> <Self::Database as Database>::Value {
         match self.0 {
-            ODBCValueData::Value(v) => v.clone(),
+            ODBCValueData::Value(v) => *v.clone(),
         }
     }
 
@@ -182,6 +241,16 @@ impl<'c> Executor<'c> for &'c mut ODBCConnection<'c> {
         'e,
         std::result::Result<<Self::Database as database::HasStatement<'q>>::Statement, Error>,
     >
+    where
+        'c: 'e,
+    {
+        todo!()
+    }
+
+    fn describe<'e, 'q: 'e>(
+        self,
+        sql: &'q str,
+    ) -> BoxFuture<'e, Result<Describe<Self::Database>, Error>>
     where
         'c: 'e,
     {
