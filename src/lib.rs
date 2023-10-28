@@ -1,8 +1,13 @@
 use std::{borrow::Cow, sync::Arc};
 
-use odbc_api::{DataType, Nullability};
-use sqlx::{Acquire, Column, Database, Executor, Row, Statement};
-use sqlx_core::{bytes::Bytes, ext::ustr::UStr, *};
+use odbc_api::{parameter::InputParameter, DataType};
+use sqlx::{Acquire, Arguments, Column, Database, Executor, Row, Statement};
+use sqlx_core::{
+    bytes::Bytes,
+    database::{HasArguments, HasStatement},
+    ext::ustr::UStr,
+    *,
+};
 
 #[derive(Debug)]
 pub struct ODBC;
@@ -12,8 +17,13 @@ pub struct ODBCConnection<'a>(odbc_api::Connection<'a>);
 
 pub struct ODBCRow<'a>(odbc_api::CursorRow<'a>);
 
+// FIXME: This needs to go away
+unsafe impl<'a> Sync for ODBCRow<'a> {}
+unsafe impl<'a> Send for ODBCRow<'a> {}
+
+#[derive(Default)]
 pub struct ODBCArguments<'q> {
-    pub(crate) values: Vec<SqliteArgumentValue<'q>>,
+    pub(crate) values: Vec<Box<dyn InputParameter + Send + 'q>>,
 }
 
 pub struct ODBCTransactionManager;
@@ -90,7 +100,7 @@ impl<'c> Acquire<'c> for &'c mut ODBCConnection<'c> {
     }
 }
 
-impl Row for ODBCRow<'a> {
+impl<'a> Row for ODBCRow<'a> {
     type Database = ODBC;
 
     fn columns(&self) -> &[<Self::Database as Database>::Column] {}
@@ -187,4 +197,33 @@ impl<'q> Statement<'q> for ODBCStatement<'q> {
     }
 
     impl_statement_query!(ODBCArguments);
+}
+
+impl<'q> HasStatement<'q> for ODBC {
+    type Database = ODBC;
+
+    type Statement = ODBCStatement<'q>;
+}
+
+impl<'q> Arguments<'q> for ODBCArguments<'q> {
+    type Database = ODBC;
+
+    fn reserve(&mut self, additional: usize, size: usize) {
+        // TODO: implement this
+    }
+
+    fn add<T>(&mut self, value: T)
+    where
+        T: 'q + Send + encode::Encode<'q, Self::Database> + types::Type<Self::Database>,
+    {
+        value.encode(&mut self.values)
+    }
+}
+
+impl<'q> HasArguments<'q> for ODBC {
+    type Database = ODBC;
+
+    type Arguments = ODBCArguments<'q>;
+
+    type ArgumentBuffer = Vec<Box<dyn InputParameter + Send + 'q>>;
 }
