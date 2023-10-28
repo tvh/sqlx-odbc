@@ -3,11 +3,10 @@ use std::{borrow::Cow, fmt::Display, sync::Arc};
 use futures_core::future::BoxFuture;
 use odbc_api::{parameter::InputParameter, DataType};
 use sqlx::{
-    Acquire, Arguments, Column, Database, Describe, Executor, Row, Statement, TransactionManager,
-    TypeInfo, ValueRef,
+    Arguments, Column, Database, Describe, Executor, Row, Statement, TransactionManager, TypeInfo,
+    ValueRef,
 };
 use sqlx_core::{
-    any::AnyTransactionManager,
     database::{HasArguments, HasStatement, HasValueRef},
     ext::ustr::UStr,
     *,
@@ -17,7 +16,11 @@ use sqlx_core::{
 pub struct ODBC;
 
 #[derive(Debug)]
-pub struct ODBCConnection<'a>(odbc_api::Connection<'a>);
+pub struct ODBCConnection(Arc<odbc_api::Connection<'static>>);
+
+// FIXME: This needs to go away
+unsafe impl Sync for ODBCConnection {}
+unsafe impl Send for ODBCConnection {}
 
 pub struct ODBCRow(Arc<odbc_api::CursorRow<'static>>);
 
@@ -114,7 +117,7 @@ impl Column for ODBCColumn {
 }
 
 impl Database for ODBC {
-    type Connection<'a> = ODBCConnection<'a>;
+    type Connection = ODBCConnection;
 
     type TransactionManager = ODBCTransactionManager;
 
@@ -168,24 +171,7 @@ impl<'r> HasValueRef<'r> for ODBC {
     type ValueRef = ODBCValueRef<'r>;
 }
 
-impl<'c> Acquire<'c> for &'c mut ODBCConnection<'c> {
-    type Database = ODBC;
-
-    type Connection = &'c mut <ODBC as Database>::Connection;
-
-    fn acquire(
-        self,
-    ) -> futures_core::future::BoxFuture<'c, std::result::Result<Self::Connection, Error>> {
-    }
-
-    fn begin(
-        self,
-    ) -> futures_core::future::BoxFuture<
-        'c,
-        std::result::Result<transaction::Transaction<'c, Self::Database>, Error>,
-    > {
-    }
-}
+impl_acquire!(ODBC, ODBCConnection);
 
 impl Row for ODBCRow {
     type Database = ODBC;
@@ -199,7 +185,7 @@ impl Row for ODBCRow {
     }
 }
 
-impl<'c> Executor<'c> for &'c mut ODBCConnection<'c> {
+impl<'c> Executor<'c> for &'c mut ODBCConnection {
     type Database = ODBC;
 
     fn fetch_many<'e, 'q: 'e, E: 'q>(
@@ -282,7 +268,7 @@ impl<'q> Statement<'q> for ODBCStatement<'q> {
         &self.sql
     }
 
-    fn parameters(&self) -> Option<Either<&[DataType], usize>> {
+    fn parameters(&self) -> Option<Either<&[ODBCTypeInfo], usize>> {
         Some(Either::Right(self.parameters))
     }
 
