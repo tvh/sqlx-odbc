@@ -1,10 +1,9 @@
 use std::{borrow::Cow, sync::Arc};
 
 use odbc_api::{parameter::InputParameter, DataType};
-use sqlx::{Acquire, Arguments, Column, Database, Executor, Row, Statement};
+use sqlx::{Acquire, Arguments, Column, Database, Executor, Row, Statement, ValueRef};
 use sqlx_core::{
-    bytes::Bytes,
-    database::{HasArguments, HasStatement},
+    database::{HasArguments, HasStatement, HasValueRef},
     ext::ustr::UStr,
     *,
 };
@@ -15,11 +14,11 @@ pub struct ODBC;
 #[derive(Debug)]
 pub struct ODBCConnection<'a>(odbc_api::Connection<'a>);
 
-pub struct ODBCRow<'a>(odbc_api::CursorRow<'a>);
+pub struct ODBCRow(Arc<odbc_api::CursorRow<'static>>);
 
 // FIXME: This needs to go away
-unsafe impl<'a> Sync for ODBCRow<'a> {}
-unsafe impl<'a> Send for ODBCRow<'a> {}
+unsafe impl Sync for ODBCRow {}
+unsafe impl Send for ODBCRow {}
 
 #[derive(Default)]
 pub struct ODBCArguments<'q> {
@@ -55,18 +54,12 @@ impl Column for ODBCColumn {
     }
 }
 
-#[derive(Clone)]
-pub struct ODBCValue {
-    pub(crate) value: Option<Bytes>,
-    pub(crate) type_info: DataType,
-}
-
 impl Database for ODBC {
     type Connection<'a> = ODBCConnection<'a>;
 
     type TransactionManager = ODBCTransactionManager;
 
-    type Row<'a> = ODBCRow<'a>;
+    type Row = ODBCRow;
 
     type QueryResult = ODBCQueryResult;
 
@@ -79,6 +72,41 @@ impl Database for ODBC {
     const NAME: &'static str = "odbc";
 
     const URL_SCHEMES: &'static [&'static str] = &[];
+}
+
+enum ODBCValue {}
+
+enum ODBCValueData<'r> {
+    Value(&'r ODBCValue),
+}
+
+pub struct ODBCValueRef<'r>(ODBCValueData<'r>);
+
+impl<'r> ValueRef<'r> for ODBCValueRef<'r> {
+    type Database = ODBC;
+
+    fn to_owned(&self) -> <Self::Database as Database>::Value {
+        match self.0 {
+            ODBCValueData::Value(v) => v.clone(),
+        }
+    }
+
+    fn type_info(&self) -> Cow<'_, <Self::Database as Database>::TypeInfo> {
+        match self.0 {
+            ODBCValueData::Value(v) => v.data_type(),
+        }
+    }
+
+    fn is_null(&self) -> bool {
+        match self.0 {
+            ODBCValueData::Value(v) => match *v {},
+        }
+    }
+}
+
+impl<'r> HasValueRef<'r> for ODBC {
+    type Database = ODBC;
+    type ValueRef = ODBCValueRef<'r>;
 }
 
 impl<'c> Acquire<'c> for &'c mut ODBCConnection<'c> {
@@ -100,15 +128,12 @@ impl<'c> Acquire<'c> for &'c mut ODBCConnection<'c> {
     }
 }
 
-impl<'a> Row for ODBCRow<'a> {
+impl Row for ODBCRow {
     type Database = ODBC;
 
     fn columns(&self) -> &[<Self::Database as Database>::Column] {}
 
-    fn try_get_raw<I>(
-        &self,
-        index: I,
-    ) -> std::result::Result<<Self::Database as database::HasValueRef<'_>>::ValueRef, Error>
+    fn try_get_raw<I>(&self, index: I) -> std::result::Result<ODBCValueRef<'_>, Error>
     where
         I: column::ColumnIndex<Self>,
     {
@@ -216,7 +241,7 @@ impl<'q> Arguments<'q> for ODBCArguments<'q> {
     where
         T: 'q + Send + encode::Encode<'q, Self::Database> + types::Type<Self::Database>,
     {
-        value.encode(&mut self.values)
+        value.encode(&mut self.values);
     }
 }
 
