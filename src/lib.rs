@@ -171,8 +171,6 @@ impl<'r> HasValueRef<'r> for ODBC {
     type ValueRef = ODBCValueRef<'r>;
 }
 
-impl_acquire!(ODBC, ODBCConnection);
-
 impl Row for ODBCRow {
     type Database = ODBC;
 
@@ -307,3 +305,9 @@ impl<'q> HasArguments<'q> for ODBC {
 
     type ArgumentBuffer = Vec<Box<dyn InputParameter + Send + 'q>>;
 }
+
+impl_into_arguments_for_arguments!(ODBCArguments<'q>);
+impl_acquire!(ODBC, ODBCConnection);
+impl_column_index_for_row!(ODBCRow);
+impl_column_index_for_statement!(ODBCStatement);
+impl_encode_for_option!(ODBC);
