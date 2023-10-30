@@ -12,3 +12,6 @@ log = "0.4.20"
 odbc-api = "2.2.0"
 sqlx = "0.7.2"
 sqlx-core = "0.7.2"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

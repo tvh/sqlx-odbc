@@ -78,7 +78,7 @@ impl Connection for ODBCConnection {
 
 #[derive(Clone, Debug)]
 pub struct ODBCConnectOptions {
-    connection_string: String,
+    pub connection_string: String,
 }
 
 impl FromStr for ODBCConnectOptions {
