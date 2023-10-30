@@ -1,9 +1,11 @@
-use sqlx::ConnectOptions;
+use sqlx::{query, ConnectOptions};
 use sqlx_odbc::{ODBCConnectOptions, ODBCConnection};
 
 async fn test_connection() -> ODBCConnection {
     let connect_options = ODBCConnectOptions {
-        connection_string: "Driver=SQLITE3;Database=:memory:;".to_string(),
+        // FIXME: This only works on macos right now
+        connection_string: "Driver=/opt/homebrew/lib/libsqlite3odbc.dylib;Database=:memory:;"
+            .to_string(),
     };
     connect_options.connect().await.unwrap()
 }
@@ -11,4 +13,10 @@ async fn test_connection() -> ODBCConnection {
 #[tokio::test]
 async fn connect() {
     let _ = test_connection().await;
+}
+
+#[tokio::test]
+async fn simple_select() {
+    let mut conn = test_connection().await;
+    let res = query("select 1").fetch_one(&mut conn).await.unwrap();
 }

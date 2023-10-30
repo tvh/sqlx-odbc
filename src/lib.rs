@@ -7,7 +7,8 @@ use std::{
 
 use futures_core::future::BoxFuture;
 use log::LevelFilter;
-use odbc_api::{parameter::InputParameter, DataType};
+use odbc_api::{parameter::InputParameter, ConnectionOptions, Cursor, DataType, Environment};
+use once_cell::sync::Lazy;
 use sqlx::{
     Arguments, Column, ConnectOptions, Connection, Database, Describe, Executor, Row, Statement,
     Transaction, TransactionManager, TypeInfo, Value, ValueRef,
@@ -18,10 +19,12 @@ use sqlx_core::{
     *,
 };
 
+static ENV: Lazy<Environment> = Lazy::new(|| Environment::new().unwrap());
+
 #[derive(Debug)]
 pub struct ODBC;
 
-pub struct ODBCConnection(Arc<odbc_api::Connection<'static>>);
+pub struct ODBCConnection(odbc_api::Connection<'static>);
 
 impl Debug for ODBCConnection {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -100,7 +103,18 @@ impl ConnectOptions for ODBCConnectOptions {
     where
         Self::Connection: Sized,
     {
-        todo!()
+        Box::pin(async {
+            match ENV.connect_with_connection_string(
+                &self.connection_string,
+                ConnectionOptions {
+                    // FIXME: Make this configurable
+                    login_timeout_sec: Some(5),
+                },
+            ) {
+                Ok(conn) => Ok(ODBCConnection(conn)),
+                Err(e) => Err(Error::AnyDriverError(Box::new(e))),
+            }
+        })
     }
 
     fn log_statements(self, level: LevelFilter) -> Self {
@@ -114,7 +128,7 @@ impl ConnectOptions for ODBCConnectOptions {
     }
 }
 
-pub struct ODBCRow(Arc<odbc_api::CursorRow<'static>>);
+pub struct ODBCRow(odbc_api::CursorRow<'static>);
 
 // FIXME: This needs to go away
 unsafe impl Sync for ODBCRow {}
@@ -295,6 +309,33 @@ impl Row for ODBCRow {
     }
 }
 
+impl ODBCConnection {
+    fn fetch_optional_internal<'q, E: 'q>(
+        &self,
+        query: E,
+    ) -> std::result::Result<Option<<ODBC as Database>::Row>, Error>
+    where
+        E: executor::Execute<'q, ODBC>,
+    {
+        let sql = query.sql().to_string();
+        // FIXME: async
+        let conn: &odbc_api::Connection<'static> = &self.0;
+        match conn.execute(
+            &sql,
+            // FIXME: Parameters
+            (),
+        ) {
+            Ok(Some(mut cursor)) => match cursor.next_row() {
+                Ok(None) => Ok(None),
+                Ok(Some(row)) => todo!(),
+                Err(e) => todo!(),
+            },
+            Ok(None) => Ok(None),
+            Err(e) => todo!(),
+        }
+    }
+}
+
 impl<'c> Executor<'c> for &'c mut ODBCConnection {
     type Database = ODBC;
 
@@ -326,7 +367,8 @@ impl<'c> Executor<'c> for &'c mut ODBCConnection {
         'c: 'e,
         E: executor::Execute<'q, Self::Database>,
     {
-        todo!()
+        let sql = query.sql().to_string();
+        Box::pin(async { self.fetch_optional_internal(query) })
     }
 
     fn prepare_with<'e, 'q: 'e>(
