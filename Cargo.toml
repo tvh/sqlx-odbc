@@ -8,6 +8,7 @@ edition = "2021"
 [dependencies]
 futures-core = "0.3.29"
 futures-util = "0.3.29"
+log = "0.4.20"
 odbc-api = "2.2.0"
 sqlx = "0.7.2"
 sqlx-core = "0.7.2"

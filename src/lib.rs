@@ -1,10 +1,16 @@
-use std::{borrow::Cow, fmt::Display, sync::Arc};
+use std::{
+    borrow::Cow,
+    fmt::{Debug, Display},
+    str::FromStr,
+    sync::Arc,
+};
 
 use futures_core::future::BoxFuture;
+use log::LevelFilter;
 use odbc_api::{parameter::InputParameter, DataType};
 use sqlx::{
-    Arguments, Column, Database, Describe, Executor, Row, Statement, TransactionManager, TypeInfo,
-    ValueRef,
+    Arguments, Column, ConnectOptions, Connection, Database, Describe, Executor, Row, Statement,
+    Transaction, TransactionManager, TypeInfo, Value, ValueRef,
 };
 use sqlx_core::{
     database::{HasArguments, HasStatement, HasValueRef},
@@ -15,12 +21,98 @@ use sqlx_core::{
 #[derive(Debug)]
 pub struct ODBC;
 
-#[derive(Debug)]
 pub struct ODBCConnection(Arc<odbc_api::Connection<'static>>);
+
+impl Debug for ODBCConnection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ODBCConnection").finish()
+    }
+}
 
 // FIXME: This needs to go away
 unsafe impl Sync for ODBCConnection {}
 unsafe impl Send for ODBCConnection {}
+
+impl Connection for ODBCConnection {
+    type Database = ODBC;
+
+    type Options = ODBCConnectOptions;
+
+    fn close(self) -> BoxFuture<'static, std::result::Result<(), Error>> {
+        // TODO: Implement this for better error handling. For now it works because of 'Drop'
+        Box::pin(async { Ok(()) })
+    }
+
+    fn ping(&mut self) -> BoxFuture<'_, std::result::Result<(), Error>> {
+        // TODO
+        Box::pin(async { Ok(()) })
+    }
+
+    fn begin(
+        &mut self,
+    ) -> BoxFuture<'_, std::result::Result<transaction::Transaction<'_, Self::Database>, Error>>
+    where
+        Self: Sized,
+    {
+        Transaction::begin(self)
+    }
+
+    fn shrink_buffers(&mut self) {
+        // TODO
+    }
+
+    fn close_hard(self) -> BoxFuture<'static, Result<(), Error>> {
+        // TODO: Implement this. For now it works because of 'Drop'
+        Box::pin(async { Ok(()) })
+    }
+
+    fn flush(&mut self) -> BoxFuture<'_, Result<(), Error>> {
+        Box::pin(async { Ok(()) })
+    }
+
+    fn should_flush(&self) -> bool {
+        // FIXME
+        false
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct ODBCConnectOptions {
+    connection_string: String,
+}
+
+impl FromStr for ODBCConnectOptions {
+    type Err = Error;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Error> {
+        Err(Error::Configuration("TODO".into()))
+    }
+}
+
+impl ConnectOptions for ODBCConnectOptions {
+    type Connection = ODBCConnection;
+
+    fn from_url(url: &Url) -> std::result::Result<Self, Error> {
+        todo!()
+    }
+
+    fn connect(&self) -> BoxFuture<'_, std::result::Result<Self::Connection, Error>>
+    where
+        Self::Connection: Sized,
+    {
+        todo!()
+    }
+
+    fn log_statements(self, level: LevelFilter) -> Self {
+        // TODO
+        self
+    }
+
+    fn log_slow_statements(self, level: LevelFilter, duration: std::time::Duration) -> Self {
+        // TODO
+        self
+    }
+}
 
 pub struct ODBCRow(Arc<odbc_api::CursorRow<'static>>);
 
@@ -65,7 +157,7 @@ impl TransactionManager for ODBCTransactionManager {
 pub struct ODBCColumn {
     pub(crate) ordinal: usize,
     pub(crate) name: String,
-    pub(crate) type_info: DataType,
+    pub(crate) type_info: ODBCTypeInfo,
 }
 
 #[derive(Default)]
@@ -112,7 +204,7 @@ impl Column for ODBCColumn {
     }
 
     fn type_info(&self) -> &<Self::Database as Database>::TypeInfo {
-        &ODBCTypeInfo(self.type_info)
+        &self.type_info
     }
 }
 
@@ -136,7 +228,24 @@ impl Database for ODBC {
     const URL_SCHEMES: &'static [&'static str] = &[];
 }
 
-enum ODBCValue {}
+#[derive(Copy, Clone)]
+pub enum ODBCValue {}
+
+impl Value for ODBCValue {
+    type Database = ODBC;
+
+    fn as_ref(&self) -> <Self::Database as HasValueRef<'_>>::ValueRef {
+        ODBCValueRef(ODBCValueData::Value(self))
+    }
+
+    fn type_info(&self) -> Cow<'_, <Self::Database as Database>::TypeInfo> {
+        match *self {}
+    }
+
+    fn is_null(&self) -> bool {
+        match *self {}
+    }
+}
 
 enum ODBCValueData<'r> {
     Value(&'r ODBCValue),
@@ -149,13 +258,13 @@ impl<'r> ValueRef<'r> for ODBCValueRef<'r> {
 
     fn to_owned(&self) -> <Self::Database as Database>::Value {
         match self.0 {
-            ODBCValueData::Value(v) => *v.clone(),
+            ODBCValueData::Value(v) => v.clone(),
         }
     }
 
     fn type_info(&self) -> Cow<'_, <Self::Database as Database>::TypeInfo> {
         match self.0 {
-            ODBCValueData::Value(v) => v.data_type(),
+            ODBCValueData::Value(v) => v.type_info(),
         }
     }
 
@@ -174,12 +283,15 @@ impl<'r> HasValueRef<'r> for ODBC {
 impl Row for ODBCRow {
     type Database = ODBC;
 
-    fn columns(&self) -> &[<Self::Database as Database>::Column] {}
+    fn columns(&self) -> &[<Self::Database as Database>::Column] {
+        todo!()
+    }
 
     fn try_get_raw<I>(&self, index: I) -> std::result::Result<ODBCValueRef<'_>, Error>
     where
         I: column::ColumnIndex<Self>,
     {
+        todo!()
     }
 }
 
