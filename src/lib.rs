@@ -10,8 +10,8 @@ use futures_core::future::BoxFuture;
 use log::LevelFilter;
 use odbc_api::{
     handles::StatementImpl, parameter::InputParameter, ColumnDescription, ConnectionOptions,
-    Cursor, CursorImpl, CursorRow, DataType, Environment, ParameterCollection,
-    ParameterCollectionRef, ResultSetMetadata,
+    Cursor, CursorImpl, CursorRow, DataType, Environment, ParameterCollectionRef,
+    ResultSetMetadata,
 };
 use once_cell::sync::Lazy;
 use sqlx::{
@@ -159,7 +159,8 @@ unsafe impl<'q> ParameterCollectionRef for ODBCArguments<'q> {
         &mut self,
         stmt: &mut impl odbc_api::handles::Statement,
     ) -> std::result::Result<(), odbc_api::Error> {
-        for (n, r) in self.values.into_iter().enumerate() {
+        for (n, r) in self.values.iter().enumerate() {
+            // FIXME: This seems to be wrong somehow...
             stmt.bind_input_parameter((n + 1).try_into().unwrap(), r.as_ref())
                 .into_result(stmt)?
         }
