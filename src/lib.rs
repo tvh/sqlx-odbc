@@ -8,7 +8,8 @@ use std::{
 use futures_core::future::BoxFuture;
 use log::LevelFilter;
 use odbc_api::{
-    parameter::InputParameter, ConnectionOptions, Cursor, CursorRow, DataType, Environment,
+    parameter::InputParameter, ColumnDescription, ConnectionOptions, Cursor, CursorRow, DataType,
+    Environment, ResultSetMetadata,
 };
 use once_cell::sync::Lazy;
 use sqlx::{
@@ -131,7 +132,10 @@ impl ConnectOptions for ODBCConnectOptions {
     }
 }
 
-pub struct ODBCRow(odbc_api::CursorRow<'static>);
+pub struct ODBCRow {
+    colums: Vec<ODBCColumn>,
+    row: odbc_api::CursorRow<'static>,
+}
 
 // FIXME: This needs to go away
 unsafe impl Sync for ODBCRow {}
@@ -170,7 +174,7 @@ impl TransactionManager for ODBCTransactionManager {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub struct ODBCColumn {
     pub(crate) ordinal: usize,
     pub(crate) name: String,
@@ -190,7 +194,7 @@ impl Extend<ODBCQueryResult> for ODBCQueryResult {
     }
 }
 
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub struct ODBCTypeInfo(DataType);
 
 impl Display for ODBCTypeInfo {
@@ -309,7 +313,7 @@ impl Row for ODBCRow {
     type Database = ODBC;
 
     fn columns(&self) -> &[<Self::Database as Database>::Column] {
-        todo!()
+        &self.colums
     }
 
     fn try_get_raw<I>(&self, index: I) -> std::result::Result<ODBCValueRef<'_>, Error>
@@ -326,13 +330,25 @@ impl ODBCConnection {
     fn fetch_optional_internal<'q, E: 'q>(
         &self,
         query: E,
-    ) -> std::result::Result<Option<<ODBC as Database>::Row>, Error>
+    ) -> std::result::Result<Option<<ODBC as Database>::Row>, odbc_api::Error>
     where
         E: executor::Execute<'q, ODBC>,
     {
         let sql = query.sql().to_string();
         // FIXME: async
         let conn: &odbc_api::Connection<'static> = &self.0;
+        let mut statement = conn.prepare(&sql)?;
+        let num_cols = statement.num_result_cols()?;
+        let mut colums: Vec<ODBCColumn> = Vec::with_capacity(num_cols.try_into().unwrap());
+        for i in 0..num_cols {
+            let mut col_desc: ColumnDescription = Default::default();
+            statement.describe_col((i + 1).try_into().unwrap(), &mut col_desc)?;
+            colums.push(ODBCColumn {
+                ordinal: i.try_into().unwrap(),
+                name: col_desc.name_to_string().unwrap(),
+                type_info: ODBCTypeInfo(col_desc.data_type),
+            })
+        }
         match conn.execute(
             &sql,
             // FIXME: Parameters
@@ -343,7 +359,7 @@ impl ODBCConnection {
                 Ok(Some(row)) => {
                     let row: CursorRow<'static> =
                         unsafe { std::mem::transmute::<CursorRow<'_>, CursorRow<'static>>(row) };
-                    Ok(Some(ODBCRow(row)))
+                    Ok(Some(ODBCRow { row, colums }))
                 }
                 Err(e) => todo!(),
             },
@@ -385,7 +401,12 @@ impl<'c> Executor<'c> for &'c mut ODBCConnection {
         E: executor::Execute<'q, Self::Database>,
     {
         let sql = query.sql().to_string();
-        Box::pin(async { self.fetch_optional_internal(query) })
+        Box::pin(async {
+            match self.fetch_optional_internal(query) {
+                Ok(res) => Ok(res),
+                Err(_) => todo!(),
+            }
+        })
     }
 
     fn prepare_with<'e, 'q: 'e>(

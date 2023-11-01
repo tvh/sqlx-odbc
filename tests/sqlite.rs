@@ -1,5 +1,5 @@
-use sqlx::{query, ConnectOptions, Row};
-use sqlx_odbc::{ODBCConnectOptions, ODBCConnection};
+use sqlx::{query, Column, ConnectOptions, Row};
+use sqlx_odbc::{ODBCColumn, ODBCConnectOptions, ODBCConnection, ODBCTypeInfo};
 
 async fn test_connection() -> ODBCConnection {
     let connect_options = ODBCConnectOptions {
@@ -18,7 +18,17 @@ async fn connect() {
 #[tokio::test]
 async fn simple_select() {
     let mut conn = test_connection().await;
-    let res = query("select 1").fetch_one(&mut conn).await.unwrap();
+    let res = query("select 1 as test_column")
+        .fetch_one(&mut conn)
+        .await
+        .unwrap();
     let columns = res.columns();
+    assert_eq!(
+        Vec::from(["test_column"]),
+        columns
+            .into_iter()
+            .map(|c| { c.name() })
+            .collect::<Vec<_>>()
+    );
     let valRef: i64 = res.try_get(0).unwrap();
 }
