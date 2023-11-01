@@ -1,4 +1,4 @@
-use sqlx::{query, ConnectOptions};
+use sqlx::{query, ConnectOptions, Row};
 use sqlx_odbc::{ODBCConnectOptions, ODBCConnection};
 
 async fn test_connection() -> ODBCConnection {
@@ -19,4 +19,6 @@ async fn connect() {
 async fn simple_select() {
     let mut conn = test_connection().await;
     let res = query("select 1").fetch_one(&mut conn).await.unwrap();
+    let columns = res.columns();
+    let valRef: i64 = res.try_get(0).unwrap();
 }

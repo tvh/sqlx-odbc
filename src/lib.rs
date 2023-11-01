@@ -7,14 +7,17 @@ use std::{
 
 use futures_core::future::BoxFuture;
 use log::LevelFilter;
-use odbc_api::{parameter::InputParameter, ConnectionOptions, Cursor, DataType, Environment};
+use odbc_api::{
+    parameter::InputParameter, ConnectionOptions, Cursor, CursorRow, DataType, Environment,
+};
 use once_cell::sync::Lazy;
 use sqlx::{
-    Arguments, Column, ConnectOptions, Connection, Database, Describe, Executor, Row, Statement,
-    Transaction, TransactionManager, TypeInfo, Value, ValueRef,
+    Arguments, Column, ConnectOptions, Connection, Database, Decode, Describe, Executor, Row,
+    Statement, Transaction, TransactionManager, Type, TypeInfo, Value, ValueRef,
 };
 use sqlx_core::{
     database::{HasArguments, HasStatement, HasValueRef},
+    error::BoxDynError,
     ext::ustr::UStr,
     *,
 };
@@ -243,7 +246,9 @@ impl Database for ODBC {
 }
 
 #[derive(Copy, Clone)]
-pub enum ODBCValue {}
+pub enum ODBCValue {
+    I64(i64),
+}
 
 impl Value for ODBCValue {
     type Database = ODBC;
@@ -253,11 +258,15 @@ impl Value for ODBCValue {
     }
 
     fn type_info(&self) -> Cow<'_, <Self::Database as Database>::TypeInfo> {
-        match *self {}
+        match *self {
+            Self::I64(_) => Cow::Owned(ODBCTypeInfo(DataType::BigInt)),
+        }
     }
 
     fn is_null(&self) -> bool {
-        match *self {}
+        match *self {
+            Self::I64(_) => false,
+        }
     }
 }
 
@@ -284,7 +293,9 @@ impl<'r> ValueRef<'r> for ODBCValueRef<'r> {
 
     fn is_null(&self) -> bool {
         match self.0 {
-            ODBCValueData::Value(v) => match *v {},
+            ODBCValueData::Value(v) => match *v {
+                ODBCValue::I64(_) => false,
+            },
         }
     }
 }
@@ -305,6 +316,8 @@ impl Row for ODBCRow {
     where
         I: column::ColumnIndex<Self>,
     {
+        let index = index.index(self)?;
+        // TODO: Type dependant dispatch
         todo!()
     }
 }
@@ -327,7 +340,11 @@ impl ODBCConnection {
         ) {
             Ok(Some(mut cursor)) => match cursor.next_row() {
                 Ok(None) => Ok(None),
-                Ok(Some(row)) => todo!(),
+                Ok(Some(row)) => {
+                    let row: CursorRow<'static> =
+                        unsafe { std::mem::transmute::<CursorRow<'_>, CursorRow<'static>>(row) };
+                    Ok(Some(ODBCRow(row)))
+                }
                 Err(e) => todo!(),
             },
             Ok(None) => Ok(None),
@@ -465,3 +482,19 @@ impl_acquire!(ODBC, ODBCConnection);
 impl_column_index_for_row!(ODBCRow);
 impl_column_index_for_statement!(ODBCStatement);
 impl_encode_for_option!(ODBC);
+
+impl Type<ODBC> for i64 {
+    fn type_info() -> ODBCTypeInfo {
+        ODBCTypeInfo(DataType::BigInt)
+    }
+
+    fn compatible(ty: &ODBCTypeInfo) -> bool {
+        matches!(ty.0, DataType::BigInt)
+    }
+}
+
+impl<'r> Decode<'r, ODBC> for i64 {
+    fn decode(value: ODBCValueRef<'r>) -> Result<Self, BoxDynError> {
+        todo!()
+    }
+}
