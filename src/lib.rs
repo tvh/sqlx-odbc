@@ -1,6 +1,7 @@
 use std::{
     borrow::Cow,
     fmt::{Debug, Display},
+    mem::transmute,
     str::FromStr,
     sync::Arc,
 };
@@ -8,8 +9,8 @@ use std::{
 use futures_core::future::BoxFuture;
 use log::LevelFilter;
 use odbc_api::{
-    parameter::InputParameter, ColumnDescription, ConnectionOptions, Cursor, CursorRow, DataType,
-    Environment, ResultSetMetadata,
+    handles::StatementImpl, parameter::InputParameter, ColumnDescription, ConnectionOptions,
+    Cursor, CursorImpl, CursorRow, DataType, Environment, ResultSetMetadata,
 };
 use once_cell::sync::Lazy;
 use sqlx::{
@@ -135,6 +136,8 @@ impl ConnectOptions for ODBCConnectOptions {
 pub struct ODBCRow {
     colums: Vec<ODBCColumn>,
     row: std::cell::RefCell<odbc_api::CursorRow<'static>>,
+    // NOTE: Here so that they are not dropped
+    _cursor: Arc<CursorImpl<StatementImpl<'static>>>,
 }
 
 // FIXME: This needs to go away
@@ -371,18 +374,23 @@ impl ODBCConnection {
             // FIXME: Parameters
             (),
         ) {
-            Ok(Some(mut cursor)) => match cursor.next_row() {
-                Ok(None) => Ok(None),
-                Ok(Some(row)) => {
-                    let row: CursorRow<'static> =
-                        unsafe { std::mem::transmute::<CursorRow<'_>, CursorRow<'static>>(row) };
-                    Ok(Some(ODBCRow {
-                        row: std::cell::RefCell::new(row),
-                        colums,
-                    }))
+            Ok(Some(mut cursor)) => {
+                let mut cursor: CursorImpl<StatementImpl<'static>> = unsafe { transmute(cursor) };
+                match cursor.next_row() {
+                    Ok(None) => Ok(None),
+                    Ok(Some(row)) => {
+                        let row: CursorRow<'static> = unsafe {
+                            std::mem::transmute::<CursorRow<'_>, CursorRow<'static>>(row)
+                        };
+                        Ok(Some(ODBCRow {
+                            row: std::cell::RefCell::new(row),
+                            colums,
+                            _cursor: Arc::new(cursor),
+                        }))
+                    }
+                    Err(e) => todo!(),
                 }
-                Err(e) => todo!(),
-            },
+            }
             Ok(None) => Ok(None),
             Err(e) => todo!(),
         }
@@ -536,6 +544,9 @@ impl Type<ODBC> for i64 {
 
 impl<'r> Decode<'r, ODBC> for i64 {
     fn decode(value: ODBCValueRef<'r>) -> Result<Self, BoxDynError> {
-        todo!()
+        match value.0 {
+            ODBCValueData::Value(ODBCValue::I64(i)) => Ok(i),
+            ODBCValueData::ValueRef(ODBCValue::I64(i)) => Ok(i.to_owned()),
+        }
     }
 }
