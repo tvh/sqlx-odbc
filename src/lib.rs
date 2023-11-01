@@ -134,7 +134,7 @@ impl ConnectOptions for ODBCConnectOptions {
 
 pub struct ODBCRow {
     colums: Vec<ODBCColumn>,
-    row: odbc_api::CursorRow<'static>,
+    row: std::cell::RefCell<odbc_api::CursorRow<'static>>,
 }
 
 // FIXME: This needs to go away
@@ -258,7 +258,7 @@ impl Value for ODBCValue {
     type Database = ODBC;
 
     fn as_ref(&self) -> <Self::Database as HasValueRef<'_>>::ValueRef {
-        ODBCValueRef(ODBCValueData::Value(self))
+        ODBCValueRef(ODBCValueData::ValueRef(self))
     }
 
     fn type_info(&self) -> Cow<'_, <Self::Database as Database>::TypeInfo> {
@@ -275,7 +275,8 @@ impl Value for ODBCValue {
 }
 
 enum ODBCValueData<'r> {
-    Value(&'r ODBCValue),
+    ValueRef(&'r ODBCValue),
+    Value(ODBCValue),
 }
 
 pub struct ODBCValueRef<'r>(ODBCValueData<'r>);
@@ -286,18 +287,26 @@ impl<'r> ValueRef<'r> for ODBCValueRef<'r> {
     fn to_owned(&self) -> <Self::Database as Database>::Value {
         match self.0 {
             ODBCValueData::Value(v) => v.clone(),
+            ODBCValueData::ValueRef(v) => v.clone(),
         }
     }
 
     fn type_info(&self) -> Cow<'_, <Self::Database as Database>::TypeInfo> {
         match self.0 {
-            ODBCValueData::Value(v) => v.type_info(),
+            ODBCValueData::Value(v) => {
+                let res = v.type_info().into_owned();
+                Cow::Owned(res)
+            }
+            ODBCValueData::ValueRef(v) => v.type_info(),
         }
     }
 
     fn is_null(&self) -> bool {
         match self.0 {
-            ODBCValueData::Value(v) => match *v {
+            ODBCValueData::ValueRef(v) => match *v {
+                ODBCValue::I64(_) => false,
+            },
+            ODBCValueData::Value(v) => match v {
                 ODBCValue::I64(_) => false,
             },
         }
@@ -322,7 +331,15 @@ impl Row for ODBCRow {
     {
         let index = index.index(self)?;
         // TODO: Type dependant dispatch
-        todo!()
+        let mut res: i64 = 0;
+        match self
+            .row
+            .borrow_mut()
+            .get_data((index + 1).try_into().unwrap(), &mut res)
+        {
+            Ok(()) => Ok(ODBCValueRef(ODBCValueData::Value(ODBCValue::I64(res)))),
+            Err(_) => todo!(),
+        }
     }
 }
 
@@ -359,7 +376,10 @@ impl ODBCConnection {
                 Ok(Some(row)) => {
                     let row: CursorRow<'static> =
                         unsafe { std::mem::transmute::<CursorRow<'_>, CursorRow<'static>>(row) };
-                    Ok(Some(ODBCRow { row, colums }))
+                    Ok(Some(ODBCRow {
+                        row: std::cell::RefCell::new(row),
+                        colums,
+                    }))
                 }
                 Err(e) => todo!(),
             },
