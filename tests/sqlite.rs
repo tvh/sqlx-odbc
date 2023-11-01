@@ -33,3 +33,23 @@ async fn simple_select() {
     let val: i64 = res.try_get(0).unwrap();
     assert_eq!(42, val)
 }
+
+#[tokio::test]
+async fn select_with_arg() {
+    let mut conn = test_connection().await;
+    let res = query("select ?+1 as test_column")
+        .bind(42)
+        .fetch_one(&mut conn)
+        .await
+        .unwrap();
+    let columns = res.columns();
+    assert_eq!(
+        Vec::from(["test_column"]),
+        columns
+            .into_iter()
+            .map(|c| { c.name() })
+            .collect::<Vec<_>>()
+    );
+    let val: i64 = res.try_get(0).unwrap();
+    assert_eq!(43, val)
+}

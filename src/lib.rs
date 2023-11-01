@@ -10,12 +10,13 @@ use futures_core::future::BoxFuture;
 use log::LevelFilter;
 use odbc_api::{
     handles::StatementImpl, parameter::InputParameter, ColumnDescription, ConnectionOptions,
-    Cursor, CursorImpl, CursorRow, DataType, Environment, ResultSetMetadata,
+    Cursor, CursorImpl, CursorRow, DataType, Environment, ParameterCollection,
+    ParameterCollectionRef, ResultSetMetadata,
 };
 use once_cell::sync::Lazy;
 use sqlx::{
-    Arguments, Column, ConnectOptions, Connection, Database, Decode, Describe, Executor, Row,
-    Statement, Transaction, TransactionManager, Type, TypeInfo, Value, ValueRef,
+    Arguments, Column, ConnectOptions, Connection, Database, Decode, Describe, Encode, Executor,
+    Row, Statement, Transaction, TransactionManager, Type, TypeInfo, Value, ValueRef,
 };
 use sqlx_core::{
     database::{HasArguments, HasStatement, HasValueRef},
@@ -147,6 +148,23 @@ unsafe impl Send for ODBCRow {}
 #[derive(Default)]
 pub struct ODBCArguments<'q> {
     pub(crate) values: Vec<Box<dyn InputParameter + Send + 'q>>,
+}
+
+unsafe impl<'q> ParameterCollectionRef for ODBCArguments<'q> {
+    fn parameter_set_size(&self) -> usize {
+        self.values.len()
+    }
+
+    unsafe fn bind_parameters_to(
+        &mut self,
+        stmt: &mut impl odbc_api::handles::Statement,
+    ) -> std::result::Result<(), odbc_api::Error> {
+        for (n, r) in self.values.into_iter().enumerate() {
+            stmt.bind_input_parameter((n + 1).try_into().unwrap(), r.as_ref())
+                .into_result(stmt)?
+        }
+        Ok(())
+    }
 }
 
 pub struct ODBCTransactionManager;
@@ -349,7 +367,7 @@ impl Row for ODBCRow {
 impl ODBCConnection {
     fn fetch_optional_internal<'q, E: 'q>(
         &self,
-        query: E,
+        mut query: E,
     ) -> std::result::Result<Option<<ODBC as Database>::Row>, odbc_api::Error>
     where
         E: executor::Execute<'q, ODBC>,
@@ -369,16 +387,13 @@ impl ODBCConnection {
                 type_info: ODBCTypeInfo(col_desc.data_type),
             })
         }
-        match conn.execute(
-            &sql,
-            // FIXME: Parameters
-            (),
-        ) {
-            Ok(Some(mut cursor)) => {
+        let arguments = query.take_arguments().unwrap_or(ODBCArguments::default());
+        match conn.execute(&sql, arguments)? {
+            Some(mut cursor) => {
                 let mut cursor: CursorImpl<StatementImpl<'static>> = unsafe { transmute(cursor) };
-                match cursor.next_row() {
-                    Ok(None) => Ok(None),
-                    Ok(Some(row)) => {
+                match cursor.next_row()? {
+                    None => Ok(None),
+                    Some(row) => {
                         let row: CursorRow<'static> = unsafe {
                             std::mem::transmute::<CursorRow<'_>, CursorRow<'static>>(row)
                         };
@@ -388,11 +403,9 @@ impl ODBCConnection {
                             _cursor: Arc::new(cursor),
                         }))
                     }
-                    Err(e) => todo!(),
                 }
             }
-            Ok(None) => Ok(None),
-            Err(e) => todo!(),
+            None => Ok(None),
         }
     }
 }
@@ -419,7 +432,7 @@ impl<'c> Executor<'c> for &'c mut ODBCConnection {
 
     fn fetch_optional<'e, 'q: 'e, E: 'q>(
         self,
-        query: E,
+        mut query: E,
     ) -> futures_core::future::BoxFuture<
         'e,
         std::result::Result<Option<<Self::Database as Database>::Row>, Error>,
@@ -428,11 +441,10 @@ impl<'c> Executor<'c> for &'c mut ODBCConnection {
         'c: 'e,
         E: executor::Execute<'q, Self::Database>,
     {
-        let sql = query.sql().to_string();
         Box::pin(async {
             match self.fetch_optional_internal(query) {
                 Ok(res) => Ok(res),
-                Err(_) => todo!(),
+                Err(e) => Err(Error::AnyDriverError(Box::new(e))),
             }
         })
     }
@@ -548,5 +560,15 @@ impl<'r> Decode<'r, ODBC> for i64 {
             ODBCValueData::Value(ODBCValue::I64(i)) => Ok(i),
             ODBCValueData::ValueRef(ODBCValue::I64(i)) => Ok(i.to_owned()),
         }
+    }
+}
+
+impl<'r> Encode<'r, ODBC> for i64 {
+    fn encode_by_ref(
+        &self,
+        buf: &mut <ODBC as HasArguments<'r>>::ArgumentBuffer,
+    ) -> encode::IsNull {
+        buf.push(Box::new(self.to_owned()));
+        encode::IsNull::No
     }
 }
