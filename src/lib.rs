@@ -9,9 +9,8 @@ use std::{
 use futures_core::future::BoxFuture;
 use log::LevelFilter;
 use odbc_api::{
-    handles::StatementImpl, parameter::InputParameter, ColumnDescription, ConnectionOptions,
-    Cursor, CursorImpl, CursorRow, DataType, Environment, ParameterCollectionRef,
-    ResultSetMetadata,
+    handles::StatementImpl, ColumnDescription, ConnectionOptions, Cursor, CursorImpl, CursorRow,
+    DataType, Environment, ParameterCollectionRef, ResultSetMetadata,
 };
 use once_cell::sync::Lazy;
 use sqlx::{
@@ -163,7 +162,7 @@ unsafe impl ParameterCollectionRef for ODBCArguments {
             // FIXME: This seems to be wrong somehow...
             match r {
                 ODBCValue::I32(i) => stmt
-                    .bind_input_parameter((n + 1).try_into().unwrap(), &42)
+                    .bind_input_parameter((n + 1).try_into().unwrap(), i)
                     .into_result(stmt)?,
             }
         }
