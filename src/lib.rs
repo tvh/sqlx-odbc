@@ -161,9 +161,11 @@ unsafe impl ParameterCollectionRef for ODBCArguments {
         for (n, r) in self.values.iter().enumerate() {
             // FIXME: This seems to be wrong somehow...
             match r {
-                ODBCValue::I32(i) => stmt
-                    .bind_input_parameter((n + 1).try_into().unwrap(), i)
-                    .into_result(stmt)?,
+                ODBCValue::I32(i) => {
+                    let i = i.to_owned();
+                    stmt.bind_input_parameter((n + 1).try_into().unwrap(), &i)
+                        .into_result(stmt)?
+                }
             }
         }
         Ok(())
@@ -282,7 +284,7 @@ impl Value for ODBCValue {
     type Database = ODBC;
 
     fn as_ref(&self) -> <Self::Database as HasValueRef<'_>>::ValueRef {
-        ODBCValueRef(ODBCValueData::ValueRef(self))
+        ODBCValueRef(Cow::Borrowed(self))
     }
 
     fn type_info(&self) -> Cow<'_, <Self::Database as Database>::TypeInfo> {
@@ -298,41 +300,23 @@ impl Value for ODBCValue {
     }
 }
 
-enum ODBCValueData<'r> {
-    ValueRef(&'r ODBCValue),
-    Value(ODBCValue),
-}
-
-pub struct ODBCValueRef<'r>(ODBCValueData<'r>);
+pub struct ODBCValueRef<'r>(Cow<'r, ODBCValue>);
 
 impl<'r> ValueRef<'r> for ODBCValueRef<'r> {
     type Database = ODBC;
 
     fn to_owned(&self) -> <Self::Database as Database>::Value {
-        match self.0 {
-            ODBCValueData::Value(v) => v.clone(),
-            ODBCValueData::ValueRef(v) => v.clone(),
-        }
+        self.0.clone().into_owned()
     }
 
     fn type_info(&self) -> Cow<'_, <Self::Database as Database>::TypeInfo> {
-        match self.0 {
-            ODBCValueData::Value(v) => {
-                let res = v.type_info().into_owned();
-                Cow::Owned(res)
-            }
-            ODBCValueData::ValueRef(v) => v.type_info(),
-        }
+        let res = self.0.type_info().into_owned();
+        Cow::Owned(res)
     }
 
     fn is_null(&self) -> bool {
-        match self.0 {
-            ODBCValueData::ValueRef(v) => match *v {
-                ODBCValue::I32(_) => false,
-            },
-            ODBCValueData::Value(v) => match v {
-                ODBCValue::I32(_) => false,
-            },
+        match self.0.as_ref() {
+            ODBCValue::I32(_) => false,
         }
     }
 }
@@ -361,7 +345,7 @@ impl Row for ODBCRow {
             .borrow_mut()
             .get_data((index + 1).try_into().unwrap(), &mut res)
         {
-            Ok(()) => Ok(ODBCValueRef(ODBCValueData::Value(ODBCValue::I32(res)))),
+            Ok(()) => Ok(ODBCValueRef(Cow::Owned(ODBCValue::I32(res)))),
             Err(_) => todo!(),
         }
     }
@@ -559,9 +543,8 @@ impl Type<ODBC> for i32 {
 
 impl<'r> Decode<'r, ODBC> for i32 {
     fn decode(value: ODBCValueRef<'r>) -> Result<Self, BoxDynError> {
-        match value.0 {
-            ODBCValueData::Value(ODBCValue::I32(i)) => Ok(i),
-            ODBCValueData::ValueRef(ODBCValue::I32(i)) => Ok(i.to_owned()),
+        match value.0.into_owned() {
+            ODBCValue::I32(i) => Ok(i),
         }
     }
 }
