@@ -152,7 +152,7 @@ pub struct ODBCArguments<'q> {
 
 unsafe impl<'q> ParameterCollectionRef for ODBCArguments<'q> {
     fn parameter_set_size(&self) -> usize {
-        self.values.len()
+        1
     }
 
     unsafe fn bind_parameters_to(
