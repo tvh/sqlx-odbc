@@ -30,7 +30,7 @@ async fn simple_select() {
             .map(|c| { c.name() })
             .collect::<Vec<_>>()
     );
-    let val: i64 = res.try_get(0).unwrap();
+    let val: i32 = res.try_get(0).unwrap();
     assert_eq!(42, val)
 }
 
@@ -50,6 +50,6 @@ async fn select_with_arg() {
             .map(|c| { c.name() })
             .collect::<Vec<_>>()
     );
-    let val: i64 = res.try_get(0).unwrap();
+    let val: i32 = res.try_get(0).unwrap();
     assert_eq!(43, val)
 }

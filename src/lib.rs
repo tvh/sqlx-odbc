@@ -146,11 +146,11 @@ unsafe impl Sync for ODBCRow {}
 unsafe impl Send for ODBCRow {}
 
 #[derive(Default)]
-pub struct ODBCArguments<'q> {
-    pub(crate) values: Vec<Box<dyn InputParameter + Send + 'q>>,
+pub struct ODBCArguments {
+    pub(crate) values: Vec<ODBCValue>,
 }
 
-unsafe impl<'q> ParameterCollectionRef for ODBCArguments<'q> {
+unsafe impl ParameterCollectionRef for ODBCArguments {
     fn parameter_set_size(&self) -> usize {
         1
     }
@@ -161,8 +161,11 @@ unsafe impl<'q> ParameterCollectionRef for ODBCArguments<'q> {
     ) -> std::result::Result<(), odbc_api::Error> {
         for (n, r) in self.values.iter().enumerate() {
             // FIXME: This seems to be wrong somehow...
-            stmt.bind_input_parameter((n + 1).try_into().unwrap(), r.as_ref())
-                .into_result(stmt)?
+            match r {
+                ODBCValue::I32(i) => stmt
+                    .bind_input_parameter((n + 1).try_into().unwrap(), &42)
+                    .into_result(stmt)?,
+            }
         }
         Ok(())
     }
@@ -273,7 +276,7 @@ impl Database for ODBC {
 
 #[derive(Copy, Clone)]
 pub enum ODBCValue {
-    I64(i64),
+    I32(i32),
 }
 
 impl Value for ODBCValue {
@@ -285,13 +288,13 @@ impl Value for ODBCValue {
 
     fn type_info(&self) -> Cow<'_, <Self::Database as Database>::TypeInfo> {
         match *self {
-            Self::I64(_) => Cow::Owned(ODBCTypeInfo(DataType::BigInt)),
+            Self::I32(_) => Cow::Owned(ODBCTypeInfo(DataType::BigInt)),
         }
     }
 
     fn is_null(&self) -> bool {
         match *self {
-            Self::I64(_) => false,
+            Self::I32(_) => false,
         }
     }
 }
@@ -326,10 +329,10 @@ impl<'r> ValueRef<'r> for ODBCValueRef<'r> {
     fn is_null(&self) -> bool {
         match self.0 {
             ODBCValueData::ValueRef(v) => match *v {
-                ODBCValue::I64(_) => false,
+                ODBCValue::I32(_) => false,
             },
             ODBCValueData::Value(v) => match v {
-                ODBCValue::I64(_) => false,
+                ODBCValue::I32(_) => false,
             },
         }
     }
@@ -353,13 +356,13 @@ impl Row for ODBCRow {
     {
         let index = index.index(self)?;
         // TODO: Type dependant dispatch
-        let mut res: i64 = 0;
+        let mut res: i32 = 0;
         match self
             .row
             .borrow_mut()
             .get_data((index + 1).try_into().unwrap(), &mut res)
         {
-            Ok(()) => Ok(ODBCValueRef(ODBCValueData::Value(ODBCValue::I64(res)))),
+            Ok(()) => Ok(ODBCValueRef(ODBCValueData::Value(ODBCValue::I32(res)))),
             Err(_) => todo!(),
         }
     }
@@ -516,7 +519,7 @@ impl<'q> HasStatement<'q> for ODBC {
     type Statement = ODBCStatement<'q>;
 }
 
-impl<'q> Arguments<'q> for ODBCArguments<'q> {
+impl<'q> Arguments<'q> for ODBCArguments {
     type Database = ODBC;
 
     fn reserve(&mut self, additional: usize, size: usize) {
@@ -534,42 +537,42 @@ impl<'q> Arguments<'q> for ODBCArguments<'q> {
 impl<'q> HasArguments<'q> for ODBC {
     type Database = ODBC;
 
-    type Arguments = ODBCArguments<'q>;
+    type Arguments = ODBCArguments;
 
-    type ArgumentBuffer = Vec<Box<dyn InputParameter + Send + 'q>>;
+    type ArgumentBuffer = Vec<ODBCValue>;
 }
 
-impl_into_arguments_for_arguments!(ODBCArguments<'q>);
+impl_into_arguments_for_arguments!(ODBCArguments);
 impl_acquire!(ODBC, ODBCConnection);
 impl_column_index_for_row!(ODBCRow);
 impl_column_index_for_statement!(ODBCStatement);
 impl_encode_for_option!(ODBC);
 
-impl Type<ODBC> for i64 {
+impl Type<ODBC> for i32 {
     fn type_info() -> ODBCTypeInfo {
-        ODBCTypeInfo(DataType::BigInt)
+        ODBCTypeInfo(DataType::Integer)
     }
 
     fn compatible(ty: &ODBCTypeInfo) -> bool {
-        matches!(ty.0, DataType::BigInt)
+        matches!(ty.0, DataType::Integer | DataType::BigInt)
     }
 }
 
-impl<'r> Decode<'r, ODBC> for i64 {
+impl<'r> Decode<'r, ODBC> for i32 {
     fn decode(value: ODBCValueRef<'r>) -> Result<Self, BoxDynError> {
         match value.0 {
-            ODBCValueData::Value(ODBCValue::I64(i)) => Ok(i),
-            ODBCValueData::ValueRef(ODBCValue::I64(i)) => Ok(i.to_owned()),
+            ODBCValueData::Value(ODBCValue::I32(i)) => Ok(i),
+            ODBCValueData::ValueRef(ODBCValue::I32(i)) => Ok(i.to_owned()),
         }
     }
 }
 
-impl<'r> Encode<'r, ODBC> for i64 {
+impl<'r> Encode<'r, ODBC> for i32 {
     fn encode_by_ref(
         &self,
         buf: &mut <ODBC as HasArguments<'r>>::ArgumentBuffer,
     ) -> encode::IsNull {
-        buf.push(Box::new(self.to_owned()));
+        buf.push(ODBCValue::I32(self.to_owned()));
         encode::IsNull::No
     }
 }
