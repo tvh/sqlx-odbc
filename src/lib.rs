@@ -161,11 +161,9 @@ unsafe impl ParameterCollectionRef for ODBCArguments {
         for (n, r) in self.values.iter().enumerate() {
             // FIXME: This seems to be wrong somehow...
             match r {
-                ODBCValue::I32(i) => {
-                    let i = i.to_owned();
-                    stmt.bind_input_parameter((n + 1).try_into().unwrap(), &i)
-                        .into_result(stmt)?
-                }
+                ODBCValue::I32(i) => stmt
+                    .bind_input_parameter((n + 1).try_into().unwrap(), i)
+                    .into_result(stmt)?,
             }
         }
         Ok(())
