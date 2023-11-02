@@ -149,7 +149,7 @@ pub struct ODBCArguments {
     pub(crate) values: Vec<ODBCValue>,
 }
 
-unsafe impl ParameterCollectionRef for ODBCArguments {
+unsafe impl ParameterCollectionRef for &ODBCArguments {
     fn parameter_set_size(&self) -> usize {
         1
     }
@@ -373,7 +373,7 @@ impl ODBCConnection {
             })
         }
         let arguments = query.take_arguments().unwrap_or(ODBCArguments::default());
-        match conn.execute(&sql, arguments)? {
+        match conn.execute(&sql, &arguments)? {
             Some(mut cursor) => {
                 let mut cursor: CursorImpl<StatementImpl<'static>> = unsafe { transmute(cursor) };
                 match cursor.next_row()? {
