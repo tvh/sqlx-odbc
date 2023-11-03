@@ -10,7 +10,8 @@ use std::{
 use futures_core::future::BoxFuture;
 use log::LevelFilter;
 use odbc_api::{
-    handles::{CData, HasDataType, StatementImpl},
+    handles::{CData, CDataMut, HasDataType, StatementImpl},
+    parameter::CElement,
     sys::SqlDataType,
     ColumnDescription, ConnectionOptions, Cursor, CursorImpl, CursorRow, DataType, Environment,
     ParameterCollectionRef, ResultSetMetadata,
@@ -404,16 +405,32 @@ impl Row for ODBCRow {
     where
         I: column::ColumnIndex<Self>,
     {
-        let index = index.index(self)?;
         // TODO: Type dependant dispatch
-        let mut res: i64 = 0;
-        match self
-            .row
-            .borrow_mut()
-            .get_data((index + 1).try_into().unwrap(), &mut res)
-        {
-            Ok(()) => Ok(ODBCValueRef(Cow::Owned(ODBCValue::I64(res)))),
-            Err(_) => todo!(),
+        fn get_value<T: Default + CDataMut + CElement>(
+            row: &ODBCRow,
+            index: usize,
+        ) -> std::result::Result<T, Error> {
+            let mut res: T = Default::default();
+            match row
+                .row
+                .borrow_mut()
+                .get_data((index + 1).try_into().unwrap(), &mut res)
+            {
+                Ok(()) => Ok(res),
+                Err(_) => todo!(),
+            }
+        }
+
+        let index = index.index(self)?;
+        let column = self.colums.get(index).unwrap();
+        match column.type_info.0 {
+            DataType::SmallInt | DataType::Integer | DataType::BigInt => {
+                get_value(self, index).map(|x| ODBCValueRef(Cow::Owned(ODBCValue::I64(x))))
+            }
+            DataType::Real | DataType::Double | DataType::Float { precision: _ } => {
+                get_value(self, index).map(|x| ODBCValueRef(Cow::Owned(ODBCValue::F64(x))))
+            }
+            _ => todo!(),
         }
     }
 }
@@ -429,21 +446,20 @@ impl ODBCConnection {
         let sql = query.sql().to_string();
         // FIXME: async
         let conn: &odbc_api::Connection<'static> = &self.0;
-        let mut statement = conn.prepare(&sql)?;
-        let num_cols = statement.num_result_cols()?;
-        let mut colums: Vec<ODBCColumn> = Vec::with_capacity(num_cols.try_into().unwrap());
-        for i in 0..num_cols {
-            let mut col_desc: ColumnDescription = Default::default();
-            statement.describe_col((i + 1).try_into().unwrap(), &mut col_desc)?;
-            colums.push(ODBCColumn {
-                ordinal: i.try_into().unwrap(),
-                name: col_desc.name_to_string().unwrap(),
-                type_info: ODBCTypeInfo(col_desc.data_type),
-            })
-        }
         let arguments = query.take_arguments().unwrap_or(ODBCArguments::default());
         match conn.execute(&sql, &arguments)? {
             Some(mut cursor) => {
+                let num_cols = cursor.num_result_cols()?;
+                let mut colums: Vec<ODBCColumn> = Vec::with_capacity(num_cols.try_into().unwrap());
+                for i in 0..num_cols {
+                    let mut col_desc: ColumnDescription = Default::default();
+                    cursor.describe_col((i + 1).try_into().unwrap(), &mut col_desc)?;
+                    colums.push(ODBCColumn {
+                        ordinal: i.try_into().unwrap(),
+                        name: col_desc.name_to_string().unwrap(),
+                        type_info: ODBCTypeInfo(col_desc.data_type),
+                    })
+                }
                 let mut cursor: CursorImpl<StatementImpl<'static>> = unsafe { transmute(cursor) };
                 match cursor.next_row()? {
                     None => Ok(None),
