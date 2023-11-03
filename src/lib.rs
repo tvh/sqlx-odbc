@@ -161,7 +161,7 @@ unsafe impl ParameterCollectionRef for &ODBCArguments {
         for (n, r) in self.values.iter().enumerate() {
             // FIXME: This seems to be wrong somehow...
             match r {
-                ODBCValue::I32(i) => stmt
+                ODBCValue::I64(i) => stmt
                     .bind_input_parameter((n + 1).try_into().unwrap(), i)
                     .into_result(stmt)?,
             }
@@ -275,7 +275,7 @@ impl Database for ODBC {
 
 #[derive(Copy, Clone)]
 pub enum ODBCValue {
-    I32(i32),
+    I64(i64),
 }
 
 impl Value for ODBCValue {
@@ -287,13 +287,13 @@ impl Value for ODBCValue {
 
     fn type_info(&self) -> Cow<'_, <Self::Database as Database>::TypeInfo> {
         match *self {
-            Self::I32(_) => Cow::Owned(ODBCTypeInfo(DataType::BigInt)),
+            Self::I64(_) => Cow::Owned(ODBCTypeInfo(DataType::BigInt)),
         }
     }
 
     fn is_null(&self) -> bool {
         match *self {
-            Self::I32(_) => false,
+            Self::I64(_) => false,
         }
     }
 }
@@ -314,7 +314,7 @@ impl<'r> ValueRef<'r> for ODBCValueRef<'r> {
 
     fn is_null(&self) -> bool {
         match self.0.as_ref() {
-            ODBCValue::I32(_) => false,
+            ODBCValue::I64(_) => false,
         }
     }
 }
@@ -337,13 +337,13 @@ impl Row for ODBCRow {
     {
         let index = index.index(self)?;
         // TODO: Type dependant dispatch
-        let mut res: i32 = 0;
+        let mut res: i64 = 0;
         match self
             .row
             .borrow_mut()
             .get_data((index + 1).try_into().unwrap(), &mut res)
         {
-            Ok(()) => Ok(ODBCValueRef(Cow::Owned(ODBCValue::I32(res)))),
+            Ok(()) => Ok(ODBCValueRef(Cow::Owned(ODBCValue::I64(res)))),
             Err(_) => todo!(),
         }
     }
@@ -529,30 +529,33 @@ impl_column_index_for_row!(ODBCRow);
 impl_column_index_for_statement!(ODBCStatement);
 impl_encode_for_option!(ODBC);
 
-impl Type<ODBC> for i32 {
+impl Type<ODBC> for i64 {
     fn type_info() -> ODBCTypeInfo {
         ODBCTypeInfo(DataType::Integer)
     }
 
     fn compatible(ty: &ODBCTypeInfo) -> bool {
-        matches!(ty.0, DataType::Integer | DataType::BigInt)
+        matches!(
+            ty.0,
+            DataType::SmallInt | DataType::Integer | DataType::BigInt
+        )
     }
 }
 
-impl<'r> Decode<'r, ODBC> for i32 {
+impl<'r> Decode<'r, ODBC> for i64 {
     fn decode(value: ODBCValueRef<'r>) -> Result<Self, BoxDynError> {
         match value.0.into_owned() {
-            ODBCValue::I32(i) => Ok(i),
+            ODBCValue::I64(i) => Ok(i),
         }
     }
 }
 
-impl<'r> Encode<'r, ODBC> for i32 {
+impl<'r> Encode<'r, ODBC> for i64 {
     fn encode_by_ref(
         &self,
         buf: &mut <ODBC as HasArguments<'r>>::ArgumentBuffer,
     ) -> encode::IsNull {
-        buf.push(ODBCValue::I32(self.to_owned()));
+        buf.push(ODBCValue::I64(self.to_owned()));
         encode::IsNull::No
     }
 }
