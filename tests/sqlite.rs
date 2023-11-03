@@ -83,6 +83,11 @@ where
 }
 
 #[tokio::test]
+async fn roundtrip_i32() {
+    test_query_roundtrip(42 as i32).await
+}
+
+#[tokio::test]
 async fn roundtrip_i64() {
     test_query_roundtrip(42 as i64).await
 }

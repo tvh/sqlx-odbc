@@ -305,8 +305,9 @@ impl Database for ODBC {
 
 #[derive(Copy, Clone)]
 pub enum ODBCValue {
-    I64(i64),
-    F64(f64),
+    Int(i32),
+    Int64(i64),
+    Double(f64),
 }
 
 impl Value for ODBCValue {
@@ -322,8 +323,9 @@ impl Value for ODBCValue {
 
     fn is_null(&self) -> bool {
         match *self {
-            Self::I64(_) => false,
-            Self::F64(_) => false,
+            Self::Int(_) => false,
+            Self::Int64(_) => false,
+            Self::Double(_) => false,
         }
     }
 }
@@ -331,8 +333,9 @@ impl Value for ODBCValue {
 impl HasDataType for ODBCValue {
     fn data_type(&self) -> DataType {
         match self {
-            Self::I64(_) => DataType::BigInt,
-            Self::F64(_) => DataType::Double,
+            Self::Int(_) => DataType::Integer,
+            Self::Int64(_) => DataType::BigInt,
+            Self::Double(_) => DataType::Double,
         }
     }
 }
@@ -340,29 +343,33 @@ impl HasDataType for ODBCValue {
 unsafe impl CData for ODBCValue {
     fn cdata_type(&self) -> odbc_api::sys::CDataType {
         match self {
-            Self::I64(x) => x.cdata_type(),
-            Self::F64(x) => x.cdata_type(),
+            Self::Int(x) => x.cdata_type(),
+            Self::Int64(x) => x.cdata_type(),
+            Self::Double(x) => x.cdata_type(),
         }
     }
 
     fn indicator_ptr(&self) -> *const isize {
         match self {
-            Self::I64(x) => x.indicator_ptr(),
-            Self::F64(x) => x.indicator_ptr(),
+            Self::Int(x) => x.indicator_ptr(),
+            Self::Int64(x) => x.indicator_ptr(),
+            Self::Double(x) => x.indicator_ptr(),
         }
     }
 
     fn value_ptr(&self) -> *const c_void {
         match self {
-            Self::I64(x) => x.value_ptr(),
-            Self::F64(x) => x.value_ptr(),
+            Self::Int(x) => x.value_ptr(),
+            Self::Int64(x) => x.value_ptr(),
+            Self::Double(x) => x.value_ptr(),
         }
     }
 
     fn buffer_length(&self) -> isize {
         match self {
-            Self::I64(x) => x.buffer_length(),
-            Self::F64(x) => x.buffer_length(),
+            Self::Int(x) => x.buffer_length(),
+            Self::Int64(x) => x.buffer_length(),
+            Self::Double(x) => x.buffer_length(),
         }
     }
 }
@@ -383,8 +390,9 @@ impl<'r> ValueRef<'r> for ODBCValueRef<'r> {
 
     fn is_null(&self) -> bool {
         match self.0.as_ref() {
-            ODBCValue::I64(_) => false,
-            ODBCValue::F64(_) => false,
+            ODBCValue::Int(_) => false,
+            ODBCValue::Int64(_) => false,
+            ODBCValue::Double(_) => false,
         }
     }
 }
@@ -424,11 +432,14 @@ impl Row for ODBCRow {
         let index = index.index(self)?;
         let column = self.colums.get(index).unwrap();
         match column.type_info.0 {
-            DataType::SmallInt | DataType::Integer | DataType::BigInt => {
-                get_value(self, index).map(|x| ODBCValueRef(Cow::Owned(ODBCValue::I64(x))))
+            DataType::SmallInt | DataType::Integer => {
+                get_value(self, index).map(|x| ODBCValueRef(Cow::Owned(ODBCValue::Int(x))))
+            }
+            DataType::BigInt => {
+                get_value(self, index).map(|x| ODBCValueRef(Cow::Owned(ODBCValue::Int64(x))))
             }
             DataType::Real | DataType::Double | DataType::Float { precision: _ } => {
-                get_value(self, index).map(|x| ODBCValueRef(Cow::Owned(ODBCValue::F64(x))))
+                get_value(self, index).map(|x| ODBCValueRef(Cow::Owned(ODBCValue::Double(x))))
             }
             _ => todo!(),
         }
@@ -614,9 +625,38 @@ impl_column_index_for_row!(ODBCRow);
 impl_column_index_for_statement!(ODBCStatement);
 impl_encode_for_option!(ODBC);
 
-impl Type<ODBC> for i64 {
+impl Type<ODBC> for i32 {
     fn type_info() -> ODBCTypeInfo {
         ODBCTypeInfo(DataType::Integer)
+    }
+
+    fn compatible(ty: &ODBCTypeInfo) -> bool {
+        matches!(ty.0, DataType::SmallInt | DataType::Integer)
+    }
+}
+
+impl<'r> Decode<'r, ODBC> for i32 {
+    fn decode(value: ODBCValueRef<'r>) -> Result<Self, BoxDynError> {
+        match value.0.as_ref() {
+            ODBCValue::Int(i) => Ok(i.to_owned()),
+            x => todo!(),
+        }
+    }
+}
+
+impl<'r> Encode<'r, ODBC> for i32 {
+    fn encode_by_ref(
+        &self,
+        buf: &mut <ODBC as HasArguments<'r>>::ArgumentBuffer,
+    ) -> encode::IsNull {
+        buf.push(ODBCValue::Int(self.to_owned()));
+        encode::IsNull::No
+    }
+}
+
+impl Type<ODBC> for i64 {
+    fn type_info() -> ODBCTypeInfo {
+        ODBCTypeInfo(DataType::BigInt)
     }
 
     fn compatible(ty: &ODBCTypeInfo) -> bool {
@@ -630,7 +670,8 @@ impl Type<ODBC> for i64 {
 impl<'r> Decode<'r, ODBC> for i64 {
     fn decode(value: ODBCValueRef<'r>) -> Result<Self, BoxDynError> {
         match value.0.as_ref() {
-            ODBCValue::I64(i) => Ok(i.to_owned()),
+            ODBCValue::Int(i) => Ok(i.to_owned().into()),
+            ODBCValue::Int64(i) => Ok(i.to_owned()),
             x => todo!(),
         }
     }
@@ -641,7 +682,7 @@ impl<'r> Encode<'r, ODBC> for i64 {
         &self,
         buf: &mut <ODBC as HasArguments<'r>>::ArgumentBuffer,
     ) -> encode::IsNull {
-        buf.push(ODBCValue::I64(self.to_owned()));
+        buf.push(ODBCValue::Int64(self.to_owned()));
         encode::IsNull::No
     }
 }
@@ -662,7 +703,7 @@ impl Type<ODBC> for f64 {
 impl<'r> Decode<'r, ODBC> for f64 {
     fn decode(value: ODBCValueRef<'r>) -> Result<Self, BoxDynError> {
         match value.0.as_ref() {
-            ODBCValue::F64(i) => Ok(i.to_owned()),
+            ODBCValue::Double(i) => Ok(i.to_owned()),
             x => todo!(),
         }
     }
@@ -673,7 +714,7 @@ impl<'r> Encode<'r, ODBC> for f64 {
         &self,
         buf: &mut <ODBC as HasArguments<'r>>::ArgumentBuffer,
     ) -> encode::IsNull {
-        buf.push(ODBCValue::F64(self.to_owned()));
+        buf.push(ODBCValue::Double(self.to_owned()));
         encode::IsNull::No
     }
 }
