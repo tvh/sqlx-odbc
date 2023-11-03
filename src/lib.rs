@@ -1,5 +1,6 @@
 use std::{
     borrow::Cow,
+    ffi::c_void,
     fmt::{Debug, Display},
     mem::transmute,
     str::FromStr,
@@ -9,8 +10,9 @@ use std::{
 use futures_core::future::BoxFuture;
 use log::LevelFilter;
 use odbc_api::{
-    handles::StatementImpl, ColumnDescription, ConnectionOptions, Cursor, CursorImpl, CursorRow,
-    DataType, Environment, ParameterCollectionRef, ResultSetMetadata,
+    handles::{CData, HasDataType, StatementImpl},
+    ColumnDescription, ConnectionOptions, Cursor, CursorImpl, CursorRow, DataType, Environment,
+    ParameterCollectionRef, ResultSetMetadata,
 };
 use once_cell::sync::Lazy;
 use sqlx::{
@@ -159,12 +161,8 @@ unsafe impl ParameterCollectionRef for &ODBCArguments {
         stmt: &mut impl odbc_api::handles::Statement,
     ) -> std::result::Result<(), odbc_api::Error> {
         for (n, r) in self.values.iter().enumerate() {
-            // FIXME: This seems to be wrong somehow...
-            match r {
-                ODBCValue::I64(i) => stmt
-                    .bind_input_parameter((n + 1).try_into().unwrap(), i)
-                    .into_result(stmt)?,
-            }
+            stmt.bind_input_parameter((n + 1).try_into().unwrap(), r)
+                .into_result(stmt)?;
         }
         Ok(())
     }
@@ -276,6 +274,7 @@ impl Database for ODBC {
 #[derive(Copy, Clone)]
 pub enum ODBCValue {
     I64(i64),
+    F64(f64),
 }
 
 impl Value for ODBCValue {
@@ -286,14 +285,52 @@ impl Value for ODBCValue {
     }
 
     fn type_info(&self) -> Cow<'_, <Self::Database as Database>::TypeInfo> {
-        match *self {
-            Self::I64(_) => Cow::Owned(ODBCTypeInfo(DataType::BigInt)),
-        }
+        Cow::Owned(ODBCTypeInfo(self.data_type()))
     }
 
     fn is_null(&self) -> bool {
         match *self {
             Self::I64(_) => false,
+            Self::F64(_) => false,
+        }
+    }
+}
+
+impl HasDataType for ODBCValue {
+    fn data_type(&self) -> DataType {
+        match self {
+            Self::I64(_) => DataType::BigInt,
+            Self::F64(_) => DataType::Double,
+        }
+    }
+}
+
+unsafe impl CData for ODBCValue {
+    fn cdata_type(&self) -> odbc_api::sys::CDataType {
+        match self {
+            Self::I64(x) => x.cdata_type(),
+            Self::F64(x) => x.cdata_type(),
+        }
+    }
+
+    fn indicator_ptr(&self) -> *const isize {
+        match self {
+            Self::I64(x) => x.indicator_ptr(),
+            Self::F64(x) => x.indicator_ptr(),
+        }
+    }
+
+    fn value_ptr(&self) -> *const c_void {
+        match self {
+            Self::I64(x) => x.value_ptr(),
+            Self::F64(x) => x.value_ptr(),
+        }
+    }
+
+    fn buffer_length(&self) -> isize {
+        match self {
+            Self::I64(x) => x.buffer_length(),
+            Self::F64(x) => x.buffer_length(),
         }
     }
 }
@@ -315,6 +352,7 @@ impl<'r> ValueRef<'r> for ODBCValueRef<'r> {
     fn is_null(&self) -> bool {
         match self.0.as_ref() {
             ODBCValue::I64(_) => false,
+            ODBCValue::F64(_) => false,
         }
     }
 }
@@ -544,8 +582,9 @@ impl Type<ODBC> for i64 {
 
 impl<'r> Decode<'r, ODBC> for i64 {
     fn decode(value: ODBCValueRef<'r>) -> Result<Self, BoxDynError> {
-        match value.0.into_owned() {
-            ODBCValue::I64(i) => Ok(i),
+        match value.0.as_ref() {
+            ODBCValue::I64(i) => Ok(i.to_owned()),
+            x => todo!(),
         }
     }
 }
@@ -556,6 +595,38 @@ impl<'r> Encode<'r, ODBC> for i64 {
         buf: &mut <ODBC as HasArguments<'r>>::ArgumentBuffer,
     ) -> encode::IsNull {
         buf.push(ODBCValue::I64(self.to_owned()));
+        encode::IsNull::No
+    }
+}
+
+impl Type<ODBC> for f64 {
+    fn type_info() -> ODBCTypeInfo {
+        ODBCTypeInfo(DataType::Integer)
+    }
+
+    fn compatible(ty: &ODBCTypeInfo) -> bool {
+        matches!(
+            ty.0,
+            DataType::Float { precision: _ } | DataType::Real | DataType::Double
+        )
+    }
+}
+
+impl<'r> Decode<'r, ODBC> for f64 {
+    fn decode(value: ODBCValueRef<'r>) -> Result<Self, BoxDynError> {
+        match value.0.as_ref() {
+            ODBCValue::F64(i) => Ok(i.to_owned()),
+            x => todo!(),
+        }
+    }
+}
+
+impl<'r> Encode<'r, ODBC> for f64 {
+    fn encode_by_ref(
+        &self,
+        buf: &mut <ODBC as HasArguments<'r>>::ArgumentBuffer,
+    ) -> encode::IsNull {
+        buf.push(ODBCValue::F64(self.to_owned()));
         encode::IsNull::No
     }
 }

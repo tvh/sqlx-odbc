@@ -53,3 +53,41 @@ async fn select_with_arg() {
     let val: i64 = res.try_get(0).unwrap();
     assert_eq!(43, val)
 }
+
+async fn test_query_roundtrip<T>(v: T)
+where
+    T: std::fmt::Debug
+        + for<'r> sqlx::Type<sqlx_odbc::ODBC>
+        + for<'r> sqlx::Decode<'r, sqlx_odbc::ODBC>
+        + for<'r> sqlx::Encode<'r, sqlx_odbc::ODBC>
+        + Send
+        + Copy
+        + std::cmp::PartialEq,
+{
+    let mut conn = test_connection().await;
+    let res = query("select ? as test_column")
+        .bind(v)
+        .fetch_one(&mut conn)
+        .await
+        .unwrap();
+    let columns = res.columns();
+    assert_eq!(
+        Vec::from(["test_column"]),
+        columns
+            .into_iter()
+            .map(|c| { c.name() })
+            .collect::<Vec<_>>()
+    );
+    let val: T = res.try_get(0).unwrap();
+    assert_eq!(v, val)
+}
+
+#[tokio::test]
+async fn roundtrip_i64() {
+    test_query_roundtrip(42 as i64).await
+}
+
+#[tokio::test]
+async fn roundtrip_f64() {
+    test_query_roundtrip(42.12 as f64).await
+}
