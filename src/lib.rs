@@ -254,6 +254,7 @@ impl TypeInfo for ODBCTypeInfo {
             SqlDataType::EXT_BINARY => "EXT_BINARY",
             SqlDataType::EXT_VAR_BINARY => "EXT_VAR_BINARY",
             SqlDataType::EXT_LONG_VAR_BINARY => "EXT_LONG_VAR_BINARY",
+            SqlDataType::EXT_BIG_INT => "EXT_BIG_INT",
             SqlDataType::EXT_TINY_INT => "EXT_TINY_INT",
             SqlDataType::EXT_BIT => "EXT_BIT",
             SqlDataType::EXT_W_CHAR => "EXT_W_CHAR",
