@@ -11,6 +11,7 @@ use futures_core::future::BoxFuture;
 use log::LevelFilter;
 use odbc_api::{
     handles::{CData, HasDataType, StatementImpl},
+    sys::SqlDataType,
     ColumnDescription, ConnectionOptions, Cursor, CursorImpl, CursorRow, DataType, Environment,
     ParameterCollectionRef, ResultSetMetadata,
 };
@@ -231,7 +232,36 @@ impl TypeInfo for ODBCTypeInfo {
     }
 
     fn name(&self) -> &str {
-        "FIXME_TYPE_NAME"
+        let sql_type = self.0.data_type();
+        match sql_type {
+            SqlDataType::UNKNOWN_TYPE => "UNKNOWN_TYPE",
+            SqlDataType::CHAR => "CHAR",
+            SqlDataType::NUMERIC => "NUMERIC",
+            SqlDataType::DECIMAL => "DECIMAL",
+            SqlDataType::INTEGER => "INTEGER",
+            SqlDataType::SMALLINT => "SMALLINT",
+            SqlDataType::FLOAT => "FLOAT",
+            SqlDataType::REAL => "REAL",
+            SqlDataType::DOUBLE => "DOUBLE",
+            SqlDataType::DATETIME => "DATETIME",
+            SqlDataType::VARCHAR => "VARCHAR",
+            SqlDataType::DATE => "DATE",
+            SqlDataType::TIME => "TIME",
+            SqlDataType::TIMESTAMP => "TIMESTAMP",
+            SqlDataType::EXT_TIME_OR_INTERVAL => "EXT_TIME_OR_INTERVAL",
+            SqlDataType::EXT_TIMESTAMP => "EXT_TIMESTAMP",
+            SqlDataType::EXT_LONG_VARCHAR => "EXT_LONG_VARCHAR",
+            SqlDataType::EXT_BINARY => "EXT_BINARY",
+            SqlDataType::EXT_VAR_BINARY => "EXT_VAR_BINARY",
+            SqlDataType::EXT_LONG_VAR_BINARY => "EXT_LONG_VAR_BINARY",
+            SqlDataType::EXT_TINY_INT => "EXT_TINY_INT",
+            SqlDataType::EXT_BIT => "EXT_BIT",
+            SqlDataType::EXT_W_CHAR => "EXT_W_CHAR",
+            SqlDataType::EXT_W_VARCHAR => "EXT_W_VARCHAR",
+            SqlDataType::EXT_W_LONG_VARCHAR => "EXT_W_LONG_VARCHAR",
+            SqlDataType::EXT_GUID => "EXT_GUID",
+            _ => "UNKNOWN_TYPE",
+        }
     }
 }
 
@@ -601,7 +631,7 @@ impl<'r> Encode<'r, ODBC> for i64 {
 
 impl Type<ODBC> for f64 {
     fn type_info() -> ODBCTypeInfo {
-        ODBCTypeInfo(DataType::Integer)
+        ODBCTypeInfo(DataType::Double)
     }
 
     fn compatible(ty: &ODBCTypeInfo) -> bool {
