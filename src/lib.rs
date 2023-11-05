@@ -14,7 +14,7 @@ use odbc_api::{
     parameter::CElement,
     sys::SqlDataType,
     ColumnDescription, ConnectionOptions, Cursor, CursorImpl, CursorRow, DataType, Environment,
-    ParameterCollectionRef, ResultSetMetadata,
+    Nullability, Nullable, ParameterCollectionRef, ResultSetMetadata,
 };
 use once_cell::sync::Lazy;
 use sqlx::{
@@ -203,6 +203,7 @@ pub struct ODBCColumn {
     pub(crate) ordinal: usize,
     pub(crate) name: String,
     pub(crate) type_info: ODBCTypeInfo,
+    pub(crate) nullability: Nullability,
 }
 
 #[derive(Default)]
@@ -218,7 +219,7 @@ impl Extend<ODBCQueryResult> for ODBCQueryResult {
     }
 }
 
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub struct ODBCTypeInfo(DataType);
 
 impl Display for ODBCTypeInfo {
@@ -296,7 +297,7 @@ impl Database for ODBC {
 
     type TypeInfo = ODBCTypeInfo;
 
-    type Value = ODBCValue;
+    type Value = ODBCValueOpt;
 
     const NAME: &'static str = "odbc";
 
@@ -310,7 +311,13 @@ pub enum ODBCValue {
     Double(f64),
 }
 
-impl Value for ODBCValue {
+#[derive(Clone)]
+pub enum ODBCValueOpt {
+    Null(ODBCTypeInfo),
+    Value(ODBCValue),
+}
+
+impl Value for ODBCValueOpt {
     type Database = ODBC;
 
     fn as_ref(&self) -> <Self::Database as HasValueRef<'_>>::ValueRef {
@@ -318,14 +325,16 @@ impl Value for ODBCValue {
     }
 
     fn type_info(&self) -> Cow<'_, <Self::Database as Database>::TypeInfo> {
-        Cow::Owned(ODBCTypeInfo(self.data_type()))
+        Cow::Owned(match self {
+            Self::Null(t) => t.to_owned(),
+            Self::Value(x) => ODBCTypeInfo(x.data_type()),
+        })
     }
 
     fn is_null(&self) -> bool {
         match *self {
-            Self::Int(_) => false,
-            Self::Int64(_) => false,
-            Self::Double(_) => false,
+            Self::Null(_) => true,
+            Self::Value(_) => false,
         }
     }
 }
@@ -374,7 +383,7 @@ unsafe impl CData for ODBCValue {
     }
 }
 
-pub struct ODBCValueRef<'r>(Cow<'r, ODBCValue>);
+pub struct ODBCValueRef<'r>(Cow<'r, ODBCValueOpt>);
 
 impl<'r> ValueRef<'r> for ODBCValueRef<'r> {
     type Database = ODBC;
@@ -389,11 +398,7 @@ impl<'r> ValueRef<'r> for ODBCValueRef<'r> {
     }
 
     fn is_null(&self) -> bool {
-        match self.0.as_ref() {
-            ODBCValue::Int(_) => false,
-            ODBCValue::Int64(_) => false,
-            ODBCValue::Double(_) => false,
-        }
+        self.0.as_ref().is_null()
     }
 }
 
@@ -413,18 +418,21 @@ impl Row for ODBCRow {
     where
         I: column::ColumnIndex<Self>,
     {
-        // TODO: Type dependant dispatch
-        fn get_value<T: Default + CDataMut + CElement>(
+        fn get_value<T>(
             row: &ODBCRow,
             index: usize,
-        ) -> std::result::Result<T, Error> {
-            let mut res: T = Default::default();
+            mut res: Nullable<T>,
+        ) -> std::result::Result<Option<T>, Error>
+        where
+            T: Clone,
+            Nullable<T>: CElement + CDataMut,
+        {
             match row
                 .row
                 .borrow_mut()
                 .get_data((index + 1).try_into().unwrap(), &mut res)
             {
-                Ok(()) => Ok(res),
+                Ok(()) => Ok(res.into_opt()),
                 Err(_) => todo!(),
             }
         }
@@ -433,16 +441,26 @@ impl Row for ODBCRow {
         let column = self.colums.get(index).unwrap();
         match column.type_info.0 {
             DataType::SmallInt | DataType::Integer => {
-                get_value(self, index).map(|x| ODBCValueRef(Cow::Owned(ODBCValue::Int(x))))
+                let mut res: Nullable<i32> = Nullable::null();
+                get_value(self, index, res).map(|x| x.map(|x| ODBCValue::Int(x)))
             }
             DataType::BigInt => {
-                get_value(self, index).map(|x| ODBCValueRef(Cow::Owned(ODBCValue::Int64(x))))
+                let mut res: Nullable<i64> = Nullable::null();
+                get_value(self, index, res).map(|x| x.map(|x| ODBCValue::Int64(x)))
             }
             DataType::Real | DataType::Double | DataType::Float { precision: _ } => {
-                get_value(self, index).map(|x| ODBCValueRef(Cow::Owned(ODBCValue::Double(x))))
+                let mut res: Nullable<f64> = Nullable::null();
+                get_value(self, index, res).map(|x| x.map(|x| ODBCValue::Double(x)))
             }
             _ => todo!(),
         }
+        .map(|v| {
+            let v = match v {
+                None => ODBCValueOpt::Null(column.type_info),
+                Some(v) => ODBCValueOpt::Value(v),
+            };
+            ODBCValueRef(Cow::Owned(v))
+        })
     }
 }
 
@@ -469,6 +487,7 @@ impl ODBCConnection {
                         ordinal: i.try_into().unwrap(),
                         name: col_desc.name_to_string().unwrap(),
                         type_info: ODBCTypeInfo(col_desc.data_type),
+                        nullability: col_desc.nullability,
                     })
                 }
                 let mut cursor: CursorImpl<StatementImpl<'static>> = unsafe { transmute(cursor) };
@@ -623,7 +642,6 @@ impl_into_arguments_for_arguments!(ODBCArguments);
 impl_acquire!(ODBC, ODBCConnection);
 impl_column_index_for_row!(ODBCRow);
 impl_column_index_for_statement!(ODBCStatement);
-impl_encode_for_option!(ODBC);
 
 impl Type<ODBC> for i32 {
     fn type_info() -> ODBCTypeInfo {
@@ -638,7 +656,10 @@ impl Type<ODBC> for i32 {
 impl<'r> Decode<'r, ODBC> for i32 {
     fn decode(value: ODBCValueRef<'r>) -> Result<Self, BoxDynError> {
         match value.0.as_ref() {
-            ODBCValue::Int(i) => Ok(i.to_owned()),
+            ODBCValueOpt::Value(v) => match v {
+                ODBCValue::Int(i) => Ok(i.to_owned()),
+                x => todo!(),
+            },
             x => todo!(),
         }
     }
@@ -670,8 +691,11 @@ impl Type<ODBC> for i64 {
 impl<'r> Decode<'r, ODBC> for i64 {
     fn decode(value: ODBCValueRef<'r>) -> Result<Self, BoxDynError> {
         match value.0.as_ref() {
-            ODBCValue::Int(i) => Ok(i.to_owned().into()),
-            ODBCValue::Int64(i) => Ok(i.to_owned()),
+            ODBCValueOpt::Value(v) => match v {
+                ODBCValue::Int(i) => Ok(i.to_owned().into()),
+                ODBCValue::Int64(i) => Ok(i.to_owned()),
+                x => todo!(),
+            },
             x => todo!(),
         }
     }
@@ -703,7 +727,10 @@ impl Type<ODBC> for f64 {
 impl<'r> Decode<'r, ODBC> for f64 {
     fn decode(value: ODBCValueRef<'r>) -> Result<Self, BoxDynError> {
         match value.0.as_ref() {
-            ODBCValue::Double(i) => Ok(i.to_owned()),
+            ODBCValueOpt::Value(v) => match v {
+                ODBCValue::Double(i) => Ok(i.to_owned()),
+                x => todo!(),
+            },
             x => todo!(),
         }
     }
