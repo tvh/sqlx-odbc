@@ -1,3 +1,5 @@
+use std::ffi::CString;
+
 use sqlx::{query, Column, ConnectOptions, Row};
 use sqlx_odbc::{ODBCConnectOptions, ODBCConnection};
 
@@ -54,19 +56,19 @@ async fn select_with_arg() {
     assert_eq!(43, val)
 }
 
-async fn test_query_roundtrip<T>(v: T)
+async fn test_query_roundtrip<T>(v: &T)
 where
     T: std::fmt::Debug
         + for<'r> sqlx::Type<sqlx_odbc::ODBC>
         + for<'r> sqlx::Decode<'r, sqlx_odbc::ODBC>
         + for<'r> sqlx::Encode<'r, sqlx_odbc::ODBC>
         + Send
-        + Copy
+        + Clone
         + std::cmp::PartialEq,
 {
     let mut conn = test_connection().await;
     let res = query("select ? as test_column")
-        .bind(v)
+        .bind(v.clone())
         .fetch_one(&mut conn)
         .await
         .unwrap();
@@ -79,7 +81,7 @@ where
             .collect::<Vec<_>>()
     );
     let val: T = res.try_get(0).unwrap();
-    assert_eq!(v, val)
+    assert_eq!(v.clone(), val.clone())
 }
 
 async fn test_for_type<T>(v: T)
@@ -89,11 +91,11 @@ where
         + for<'r> sqlx::Decode<'r, sqlx_odbc::ODBC>
         + for<'r> sqlx::Encode<'r, sqlx_odbc::ODBC>
         + Send
-        + Copy
+        + Clone
         + std::cmp::PartialEq,
 {
-    test_query_roundtrip(v).await;
-    test_query_roundtrip(None::<T>).await;
+    test_query_roundtrip(&v).await;
+    test_query_roundtrip(&None::<T>).await;
 }
 
 #[tokio::test]
@@ -109,4 +111,9 @@ async fn roundtrip_i64() {
 #[tokio::test]
 async fn roundtrip_f64() {
     test_for_type(42.12 as f64).await
+}
+
+#[tokio::test]
+async fn roundtrip_str() {
+    test_for_type("YAY!".to_string()).await
 }

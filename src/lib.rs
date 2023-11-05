@@ -1,6 +1,6 @@
 use std::{
     borrow::Cow,
-    ffi::c_void,
+    ffi::{c_void, CString},
     fmt::{Debug, Display},
     mem::transmute,
     str::FromStr,
@@ -310,11 +310,12 @@ impl Database for ODBC {
     const URL_SCHEMES: &'static [&'static str] = &[];
 }
 
-#[derive(Copy, Clone)]
+#[derive(Clone)]
 pub enum ODBCValue {
     Int(i32),
     Int64(i64),
     Double(f64),
+    String(std::ffi::CString),
 }
 
 #[derive(Clone)]
@@ -351,6 +352,7 @@ impl HasDataType for ODBCValue {
             Self::Int(_) => DataType::Integer,
             Self::Int64(_) => DataType::BigInt,
             Self::Double(_) => DataType::Double,
+            Self::String(_) => DataType::Varchar { length: usize::MAX },
         }
     }
 }
@@ -361,6 +363,7 @@ unsafe impl CData for ODBCValue {
             Self::Int(x) => x.cdata_type(),
             Self::Int64(x) => x.cdata_type(),
             Self::Double(x) => x.cdata_type(),
+            Self::String(x) => x.cdata_type(),
         }
     }
 
@@ -369,6 +372,7 @@ unsafe impl CData for ODBCValue {
             Self::Int(x) => x.indicator_ptr(),
             Self::Int64(x) => x.indicator_ptr(),
             Self::Double(x) => x.indicator_ptr(),
+            Self::String(x) => x.indicator_ptr(),
         }
     }
 
@@ -377,6 +381,7 @@ unsafe impl CData for ODBCValue {
             Self::Int(x) => x.value_ptr(),
             Self::Int64(x) => x.value_ptr(),
             Self::Double(x) => x.value_ptr(),
+            Self::String(x) => x.value_ptr(),
         }
     }
 
@@ -385,6 +390,7 @@ unsafe impl CData for ODBCValue {
             Self::Int(x) => x.buffer_length(),
             Self::Int64(x) => x.buffer_length(),
             Self::Double(x) => x.buffer_length(),
+            Self::String(x) => x.buffer_length(),
         }
     }
 }
@@ -457,6 +463,22 @@ impl Row for ODBCRow {
             DataType::Real | DataType::Double | DataType::Float { precision: _ } => {
                 let mut res: Nullable<f64> = Nullable::null();
                 get_value(self, index, res).map(|x| x.map(|x| ODBCValue::Double(x)))
+            }
+            DataType::Char { length: _ }
+            | DataType::LongVarchar { length: _ }
+            | DataType::Varchar { length: _ }
+            | DataType::WChar { length: _ }
+            | DataType::WVarchar { length: _ } => {
+                let mut res = Vec::<u8>::new();
+                match self
+                    .row
+                    .borrow_mut()
+                    .get_text((index + 1).try_into().unwrap(), &mut res)
+                {
+                    Ok(true) => Ok(Some(ODBCValue::String(CString::new(res).unwrap()))),
+                    Ok(false) => Ok(None),
+                    Err(e) => todo!(),
+                }
             }
             x => todo!("{:?}", x),
         }
@@ -767,5 +789,49 @@ where
             }
             Some(v) => v.encode_by_ref(buf),
         }
+    }
+}
+
+impl Type<ODBC> for String {
+    fn type_info() -> ODBCTypeInfo {
+        ODBCTypeInfo(DataType::Char { length: usize::MAX })
+    }
+
+    fn compatible(ty: &ODBCTypeInfo) -> bool {
+        matches!(
+            ty.0,
+            DataType::Char { length: _ }
+                | DataType::Varchar { length: _ }
+                | DataType::LongVarchar { length: _ }
+                | DataType::WChar { length: _ }
+                | DataType::WVarchar { length: _ }
+        )
+    }
+}
+
+impl<'r> Decode<'r, ODBC> for String {
+    fn decode(value: ODBCValueRef<'r>) -> Result<Self, BoxDynError> {
+        match value.0.as_ref() {
+            ODBCValueOpt::Value(v) => match v {
+                ODBCValue::String(x) => match x.to_str() {
+                    Ok(str) => Ok(str.to_owned()),
+                    Err(e) => Err(Box::new(e)),
+                },
+                x => todo!(),
+            },
+            x => todo!(),
+        }
+    }
+}
+
+impl<'r> Encode<'r, ODBC> for String {
+    fn encode_by_ref(
+        &self,
+        buf: &mut <ODBC as HasArguments<'r>>::ArgumentBuffer,
+    ) -> encode::IsNull {
+        buf.push(ODBCValueOpt::Value(ODBCValue::String(
+            CString::new(self.clone()).unwrap(),
+        )));
+        encode::IsNull::No
     }
 }
