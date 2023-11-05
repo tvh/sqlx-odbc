@@ -150,7 +150,7 @@ unsafe impl Send for ODBCRow {}
 
 #[derive(Default)]
 pub struct ODBCArguments {
-    pub(crate) values: Vec<ODBCValue>,
+    pub(crate) values: Vec<ODBCValueOpt>,
 }
 
 unsafe impl ParameterCollectionRef for &ODBCArguments {
@@ -163,8 +163,14 @@ unsafe impl ParameterCollectionRef for &ODBCArguments {
         stmt: &mut impl odbc_api::handles::Statement,
     ) -> std::result::Result<(), odbc_api::Error> {
         for (n, r) in self.values.iter().enumerate() {
-            stmt.bind_input_parameter((n + 1).try_into().unwrap(), r)
-                .into_result(stmt)?;
+            match r {
+                ODBCValueOpt::Value(r) => stmt
+                    .bind_input_parameter((n + 1).try_into().unwrap(), r)
+                    .into_result(stmt)?,
+                ODBCValueOpt::Null(_) => stmt
+                    .bind_input_parameter((n + 1).try_into().unwrap(), &Nullable::<i32>::null())
+                    .into_result(stmt)?,
+            }
         }
         Ok(())
     }
@@ -452,7 +458,7 @@ impl Row for ODBCRow {
                 let mut res: Nullable<f64> = Nullable::null();
                 get_value(self, index, res).map(|x| x.map(|x| ODBCValue::Double(x)))
             }
-            _ => todo!(),
+            x => todo!("{:?}", x),
         }
         .map(|v| {
             let v = match v {
@@ -635,7 +641,7 @@ impl<'q> HasArguments<'q> for ODBC {
 
     type Arguments = ODBCArguments;
 
-    type ArgumentBuffer = Vec<ODBCValue>;
+    type ArgumentBuffer = Vec<ODBCValueOpt>;
 }
 
 impl_into_arguments_for_arguments!(ODBCArguments);
@@ -670,7 +676,7 @@ impl<'r> Encode<'r, ODBC> for i32 {
         &self,
         buf: &mut <ODBC as HasArguments<'r>>::ArgumentBuffer,
     ) -> encode::IsNull {
-        buf.push(ODBCValue::Int(self.to_owned()));
+        buf.push(ODBCValueOpt::Value(ODBCValue::Int(self.to_owned())));
         encode::IsNull::No
     }
 }
@@ -706,7 +712,7 @@ impl<'r> Encode<'r, ODBC> for i64 {
         &self,
         buf: &mut <ODBC as HasArguments<'r>>::ArgumentBuffer,
     ) -> encode::IsNull {
-        buf.push(ODBCValue::Int64(self.to_owned()));
+        buf.push(ODBCValueOpt::Value(ODBCValue::Int64(self.to_owned())));
         encode::IsNull::No
     }
 }
@@ -741,7 +747,25 @@ impl<'r> Encode<'r, ODBC> for f64 {
         &self,
         buf: &mut <ODBC as HasArguments<'r>>::ArgumentBuffer,
     ) -> encode::IsNull {
-        buf.push(ODBCValue::Double(self.to_owned()));
+        buf.push(ODBCValueOpt::Value(ODBCValue::Double(self.to_owned())));
         encode::IsNull::No
+    }
+}
+
+impl<'r, T> Encode<'r, ODBC> for Option<T>
+where
+    T: Encode<'r, ODBC> + sqlx::Type<ODBC>,
+{
+    fn encode_by_ref(
+        &self,
+        buf: &mut <ODBC as HasArguments<'r>>::ArgumentBuffer,
+    ) -> encode::IsNull {
+        match self {
+            None => {
+                buf.push(ODBCValueOpt::Null(T::type_info()));
+                encode::IsNull::Yes
+            }
+            Some(v) => v.encode_by_ref(buf),
+        }
     }
 }

@@ -82,17 +82,31 @@ where
     assert_eq!(v, val)
 }
 
+async fn test_for_type<T>(v: T)
+where
+    T: std::fmt::Debug
+        + for<'r> sqlx::Type<sqlx_odbc::ODBC>
+        + for<'r> sqlx::Decode<'r, sqlx_odbc::ODBC>
+        + for<'r> sqlx::Encode<'r, sqlx_odbc::ODBC>
+        + Send
+        + Copy
+        + std::cmp::PartialEq,
+{
+    test_query_roundtrip(v).await;
+    test_query_roundtrip(None::<T>).await;
+}
+
 #[tokio::test]
 async fn roundtrip_i32() {
-    test_query_roundtrip(42 as i32).await
+    test_for_type(42 as i32).await
 }
 
 #[tokio::test]
 async fn roundtrip_i64() {
-    test_query_roundtrip(42 as i64).await
+    test_for_type(42 as i64).await
 }
 
 #[tokio::test]
 async fn roundtrip_f64() {
-    test_query_roundtrip(42.12 as f64).await
+    test_for_type(42.12 as f64).await
 }
