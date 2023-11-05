@@ -316,6 +316,7 @@ pub enum ODBCValue {
     Int64(i64),
     Double(f64),
     String(std::ffi::CString),
+    Binary(Vec<u8>),
 }
 
 #[derive(Clone)]
@@ -353,6 +354,7 @@ impl HasDataType for ODBCValue {
             Self::Int64(_) => DataType::BigInt,
             Self::Double(_) => DataType::Double,
             Self::String(_) => DataType::Varchar { length: usize::MAX },
+            Self::Binary(_) => DataType::Varbinary { length: usize::MAX },
         }
     }
 }
@@ -364,6 +366,7 @@ unsafe impl CData for ODBCValue {
             Self::Int64(x) => x.cdata_type(),
             Self::Double(x) => x.cdata_type(),
             Self::String(x) => x.cdata_type(),
+            Self::Binary(x) => x.cdata_type(),
         }
     }
 
@@ -373,6 +376,7 @@ unsafe impl CData for ODBCValue {
             Self::Int64(x) => x.indicator_ptr(),
             Self::Double(x) => x.indicator_ptr(),
             Self::String(x) => x.indicator_ptr(),
+            Self::Binary(x) => x.indicator_ptr(),
         }
     }
 
@@ -382,6 +386,7 @@ unsafe impl CData for ODBCValue {
             Self::Int64(x) => x.value_ptr(),
             Self::Double(x) => x.value_ptr(),
             Self::String(x) => x.value_ptr(),
+            Self::Binary(x) => x.value_ptr(),
         }
     }
 
@@ -391,6 +396,7 @@ unsafe impl CData for ODBCValue {
             Self::Int64(x) => x.buffer_length(),
             Self::Double(x) => x.buffer_length(),
             Self::String(x) => x.buffer_length(),
+            Self::Binary(x) => x.buffer_length(),
         }
     }
 }
@@ -774,24 +780,6 @@ impl<'r> Encode<'r, ODBC> for f64 {
     }
 }
 
-impl<'r, T> Encode<'r, ODBC> for Option<T>
-where
-    T: Encode<'r, ODBC> + sqlx::Type<ODBC>,
-{
-    fn encode_by_ref(
-        &self,
-        buf: &mut <ODBC as HasArguments<'r>>::ArgumentBuffer,
-    ) -> encode::IsNull {
-        match self {
-            None => {
-                buf.push(ODBCValueOpt::Null(T::type_info()));
-                encode::IsNull::Yes
-            }
-            Some(v) => v.encode_by_ref(buf),
-        }
-    }
-}
-
 impl Type<ODBC> for String {
     fn type_info() -> ODBCTypeInfo {
         ODBCTypeInfo(DataType::Char { length: usize::MAX })
@@ -833,5 +821,60 @@ impl<'r> Encode<'r, ODBC> for String {
             CString::new(self.clone()).unwrap(),
         )));
         encode::IsNull::No
+    }
+}
+
+impl Type<ODBC> for Vec<u8> {
+    fn type_info() -> ODBCTypeInfo {
+        ODBCTypeInfo(DataType::Varbinary { length: usize::MAX })
+    }
+
+    fn compatible(ty: &ODBCTypeInfo) -> bool {
+        matches!(
+            ty.0,
+            DataType::Binary { length: _ }
+                | DataType::Varbinary { length: _ }
+                | DataType::LongVarbinary { length: _ }
+        )
+    }
+}
+
+impl<'r> Decode<'r, ODBC> for Vec<u8> {
+    fn decode(value: ODBCValueRef<'r>) -> Result<Self, BoxDynError> {
+        match value.0.as_ref() {
+            ODBCValueOpt::Value(v) => match v {
+                ODBCValue::Binary(x) => Ok(x.to_owned()),
+                x => todo!(),
+            },
+            x => todo!(),
+        }
+    }
+}
+
+impl<'r> Encode<'r, ODBC> for Vec<u8> {
+    fn encode_by_ref(
+        &self,
+        buf: &mut <ODBC as HasArguments<'r>>::ArgumentBuffer,
+    ) -> encode::IsNull {
+        buf.push(ODBCValueOpt::Value(ODBCValue::Binary(self.clone())));
+        encode::IsNull::No
+    }
+}
+
+impl<'r, T> Encode<'r, ODBC> for Option<T>
+where
+    T: Encode<'r, ODBC> + sqlx::Type<ODBC>,
+{
+    fn encode_by_ref(
+        &self,
+        buf: &mut <ODBC as HasArguments<'r>>::ArgumentBuffer,
+    ) -> encode::IsNull {
+        match self {
+            None => {
+                buf.push(ODBCValueOpt::Null(T::type_info()));
+                encode::IsNull::Yes
+            }
+            Some(v) => v.encode_by_ref(buf),
+        }
     }
 }

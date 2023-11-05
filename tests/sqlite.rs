@@ -1,5 +1,3 @@
-use std::ffi::CString;
-
 use sqlx::{query, Column, ConnectOptions, Row};
 use sqlx_odbc::{ODBCConnectOptions, ODBCConnection};
 
@@ -116,4 +114,12 @@ async fn roundtrip_f64() {
 #[tokio::test]
 async fn roundtrip_str() {
     test_for_type("YAY!".to_string()).await
+}
+
+#[tokio::test]
+async fn roundtrip_binary() {
+    test_for_type(Vec::from([
+        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
+    ]))
+    .await
 }
