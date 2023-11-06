@@ -1,6 +1,6 @@
 use std::{
     borrow::Cow,
-    ffi::{c_void, CString},
+    ffi::c_void,
     fmt::{Debug, Display},
     mem::transmute,
     str::FromStr,
@@ -11,7 +11,7 @@ use futures_core::future::BoxFuture;
 use log::LevelFilter;
 use odbc_api::{
     handles::{CData, CDataMut, HasDataType, StatementImpl},
-    parameter::{CElement, VarBinaryBox},
+    parameter::{CElement, VarBinaryBox, VarCharBox},
     sys::SqlDataType,
     ColumnDescription, ConnectionOptions, Cursor, CursorImpl, CursorRow, DataType, Environment,
     Nullability, Nullable, ParameterCollectionRef, ResultSetMetadata,
@@ -314,7 +314,7 @@ pub enum ODBCValue {
     Int(i32),
     Int64(i64),
     Double(f64),
-    String(std::ffi::CString),
+    String(VarCharBox),
     Binary(VarBinaryBox),
 }
 
@@ -324,7 +324,10 @@ impl Clone for ODBCValue {
             Self::Int(i) => Self::Int(i.clone()),
             Self::Int64(i) => Self::Int64(i.clone()),
             Self::Double(i) => Self::Double(i.clone()),
-            Self::String(i) => Self::String(i.clone()),
+            Self::String(i) => Self::String(match i.as_bytes() {
+                None => VarCharBox::null(),
+                Some(b) => VarCharBox::from_vec(Vec::from(b)),
+            }),
             Self::Binary(i) => Self::Binary(match i.as_bytes() {
                 None => VarBinaryBox::null(),
                 Some(b) => VarBinaryBox::from_vec(Vec::from(b)),
@@ -495,7 +498,7 @@ impl Row for ODBCRow {
                     .borrow_mut()
                     .get_text((index + 1).try_into().unwrap(), &mut res)
                 {
-                    Ok(true) => Ok(Some(ODBCValue::String(CString::new(res).unwrap()))),
+                    Ok(true) => Ok(Some(ODBCValue::String(VarCharBox::from_vec(res)))),
                     Ok(false) => Ok(None),
                     Err(e) => todo!(),
                 }
@@ -829,9 +832,9 @@ impl<'r> Decode<'r, ODBC> for String {
     fn decode(value: ODBCValueRef<'r>) -> Result<Self, BoxDynError> {
         match value.0.as_ref() {
             ODBCValueOpt::Value(v) => match v {
-                ODBCValue::String(x) => match x.to_str() {
-                    Ok(str) => Ok(str.to_owned()),
-                    Err(e) => Err(Box::new(e)),
+                ODBCValue::String(x) => match x.as_bytes() {
+                    None => todo!(),
+                    Some(b) => Ok(String::from_utf8(Vec::from(b))?),
                 },
                 x => todo!(),
             },
@@ -846,7 +849,7 @@ impl<'r> Encode<'r, ODBC> for String {
         buf: &mut <ODBC as HasArguments<'r>>::ArgumentBuffer,
     ) -> encode::IsNull {
         buf.push(ODBCValueOpt::Value(ODBCValue::String(
-            CString::new(self.clone()).unwrap(),
+            VarCharBox::from_string(self.clone()),
         )));
         encode::IsNull::No
     }
