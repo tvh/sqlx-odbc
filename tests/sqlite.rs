@@ -1,4 +1,4 @@
-use sqlx::{query, Column, ConnectOptions, Row};
+use sqlx::{query, Column, ConnectOptions, Executor, Row};
 use sqlx_odbc::{ODBCConnectOptions, ODBCConnection};
 
 async fn test_connection() -> ODBCConnection {
@@ -122,4 +122,17 @@ async fn roundtrip_binary() {
         1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
     ]))
     .await
+}
+
+#[tokio::test]
+async fn describe() {
+    let mut conn = test_connection().await;
+    let res = conn
+        .describe("select 1, ?+1 as num, 'Hello' || ?")
+        .await
+        .unwrap();
+    assert_eq!(
+        res.columns.iter().map(|c| c.name()).collect::<Vec<&str>>(),
+        vec!("1", "num", "'Hello' || ?")
+    )
 }

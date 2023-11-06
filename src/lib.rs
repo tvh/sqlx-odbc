@@ -573,6 +573,45 @@ impl ODBCConnection {
             None => Ok(None),
         }
     }
+
+    fn describe_internal(&self, sql: &str) -> Result<Describe<ODBC>, odbc_api::Error> {
+        let mut stmt = self.0.prepare(sql)?;
+
+        let num_cols = stmt.num_result_cols()?;
+        let mut colums: Vec<ODBCColumn> = Vec::with_capacity(num_cols.try_into().unwrap());
+        for i in 0..num_cols {
+            let mut col_desc: ColumnDescription = Default::default();
+            stmt.describe_col((i + 1).try_into().unwrap(), &mut col_desc)?;
+            colums.push(ODBCColumn {
+                ordinal: i.try_into().unwrap(),
+                name: col_desc.name_to_string().unwrap(),
+                type_info: ODBCTypeInfo(col_desc.data_type),
+                nullability: col_desc.nullability,
+            })
+        }
+
+        let num_params = stmt.num_params()?;
+        let mut params: Vec<ODBCTypeInfo> = Vec::with_capacity(num_params.try_into().unwrap());
+        for i in 0..num_params {
+            let param = stmt.describe_param((i + 1).try_into().unwrap())?;
+            params.push(ODBCTypeInfo(param.data_type));
+        }
+
+        let nullable = colums
+            .iter()
+            .map(|c| match c.nullability {
+                Nullability::NoNulls => Some(false),
+                Nullability::Nullable => Some(true),
+                Nullability::Unknown => None,
+            })
+            .collect();
+
+        Ok(Describe {
+            columns: colums,
+            parameters: Some(Either::Left(params)),
+            nullable,
+        })
+    }
 }
 
 impl<'c> Executor<'c> for &'c mut ODBCConnection {
@@ -635,7 +674,12 @@ impl<'c> Executor<'c> for &'c mut ODBCConnection {
     where
         'c: 'e,
     {
-        todo!()
+        Box::pin(async {
+            match self.describe_internal(sql) {
+                Ok(res) => Ok(res),
+                Err(e) => Err(Error::AnyDriverError(Box::new(e))),
+            }
+        })
     }
 }
 
@@ -683,15 +727,15 @@ impl<'q> HasStatement<'q> for ODBC {
 impl<'q> Arguments<'q> for ODBCArguments {
     type Database = ODBC;
 
-    fn reserve(&mut self, additional: usize, size: usize) {
-        // TODO: implement this
+    fn reserve(&mut self, additional: usize, _size: usize) {
+        self.values.reserve(additional);
     }
 
     fn add<T>(&mut self, value: T)
     where
         T: 'q + Send + encode::Encode<'q, Self::Database> + types::Type<Self::Database>,
     {
-        value.encode(&mut self.values);
+        let _ = value.encode(&mut self.values);
     }
 }
 
