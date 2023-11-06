@@ -11,7 +11,7 @@ use futures_core::future::BoxFuture;
 use log::LevelFilter;
 use odbc_api::{
     handles::{CData, CDataMut, HasDataType, StatementImpl},
-    parameter::CElement,
+    parameter::{CElement, VarBinaryBox},
     sys::SqlDataType,
     ColumnDescription, ConnectionOptions, Cursor, CursorImpl, CursorRow, DataType, Environment,
     Nullability, Nullable, ParameterCollectionRef, ResultSetMetadata,
@@ -310,13 +310,27 @@ impl Database for ODBC {
     const URL_SCHEMES: &'static [&'static str] = &[];
 }
 
-#[derive(Clone)]
 pub enum ODBCValue {
     Int(i32),
     Int64(i64),
     Double(f64),
     String(std::ffi::CString),
-    Binary(Vec<u8>),
+    Binary(VarBinaryBox),
+}
+
+impl Clone for ODBCValue {
+    fn clone(&self) -> Self {
+        match self {
+            Self::Int(i) => Self::Int(i.clone()),
+            Self::Int64(i) => Self::Int64(i.clone()),
+            Self::Double(i) => Self::Double(i.clone()),
+            Self::String(i) => Self::String(i.clone()),
+            Self::Binary(i) => Self::Binary(match i.as_bytes() {
+                None => VarBinaryBox::null(),
+                Some(b) => VarBinaryBox::from_vec(Vec::from(b)),
+            }),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -482,6 +496,20 @@ impl Row for ODBCRow {
                     .get_text((index + 1).try_into().unwrap(), &mut res)
                 {
                     Ok(true) => Ok(Some(ODBCValue::String(CString::new(res).unwrap()))),
+                    Ok(false) => Ok(None),
+                    Err(e) => todo!(),
+                }
+            }
+            DataType::Binary { length: _ }
+            | DataType::Varbinary { length: _ }
+            | DataType::LongVarbinary { length: _ } => {
+                let mut res = Vec::<u8>::new();
+                match self
+                    .row
+                    .borrow_mut()
+                    .get_binary((index + 1).try_into().unwrap(), &mut res)
+                {
+                    Ok(true) => Ok(Some(ODBCValue::Binary(VarBinaryBox::from_vec(res)))),
                     Ok(false) => Ok(None),
                     Err(e) => todo!(),
                 }
@@ -843,7 +871,10 @@ impl<'r> Decode<'r, ODBC> for Vec<u8> {
     fn decode(value: ODBCValueRef<'r>) -> Result<Self, BoxDynError> {
         match value.0.as_ref() {
             ODBCValueOpt::Value(v) => match v {
-                ODBCValue::Binary(x) => Ok(x.to_owned()),
+                ODBCValue::Binary(x) => match x.as_bytes() {
+                    None => todo!(),
+                    Some(b) => Ok(Vec::from(b)),
+                },
                 x => todo!(),
             },
             x => todo!(),
@@ -856,7 +887,9 @@ impl<'r> Encode<'r, ODBC> for Vec<u8> {
         &self,
         buf: &mut <ODBC as HasArguments<'r>>::ArgumentBuffer,
     ) -> encode::IsNull {
-        buf.push(ODBCValueOpt::Value(ODBCValue::Binary(self.clone())));
+        buf.push(ODBCValueOpt::Value(ODBCValue::Binary(
+            VarBinaryBox::from_vec(self.clone()),
+        )));
         encode::IsNull::No
     }
 }
