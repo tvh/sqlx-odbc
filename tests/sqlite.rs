@@ -1,3 +1,4 @@
+use futures_util::StreamExt;
 use sqlx::{query, Column, ConnectOptions, Executor, Row};
 use sqlx_odbc::{ODBCConnectOptions, ODBCConnection};
 
@@ -135,4 +136,49 @@ async fn describe() {
         res.columns.iter().map(|c| c.name()).collect::<Vec<&str>>(),
         vec!("1", "num", "'Hello' || ?")
     )
+}
+
+#[tokio::test]
+async fn fetch_many() {
+    let mut conn = test_connection().await;
+    let res = query(
+        "with cte(col1, col2) as
+            (values (1,'one'), (2, 'two'))
+            select * from cte",
+    )
+    .bind(42)
+    .fetch_many(&mut conn);
+    let (res1, tail) = res.into_future().await;
+    let res1 = res1.unwrap().unwrap().right().unwrap();
+    let columns = res1.columns();
+    assert_eq!(
+        Vec::from(["col1", "col2"]),
+        columns
+            .into_iter()
+            .map(|c| { c.name() })
+            .collect::<Vec<_>>()
+    );
+    let v1: i64 = res1.try_get(0).unwrap();
+    let v2: String = res1.try_get(1).unwrap();
+    assert_eq!((1, "one".to_owned()), (v1, v2));
+
+    let (res2, tail) = tail.into_future().await;
+    let res2 = res2.unwrap().unwrap().right().unwrap();
+    let columns = res1.columns();
+    assert_eq!(
+        Vec::from(["col1", "col2"]),
+        columns
+            .into_iter()
+            .map(|c| { c.name() })
+            .collect::<Vec<_>>()
+    );
+    let v1: i64 = res2.try_get(0).unwrap();
+    let v2: String = res2.try_get(1).unwrap();
+    assert_eq!((2, "two".to_owned()), (v1, v2));
+
+    let (res_empty, _tail) = tail.into_future().await;
+    match res_empty {
+        None => {}
+        Some(_) => panic!("Found result where there should be none"),
+    }
 }
