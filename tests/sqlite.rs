@@ -1,5 +1,5 @@
 use futures_util::StreamExt;
-use sqlx::{query, Column, ConnectOptions, Executor, Row};
+use sqlx::{query, Column, ConnectOptions, Connection, Executor, Row};
 use sqlx_odbc::{ODBCConnectOptions, ODBCConnection};
 
 async fn test_connection() -> ODBCConnection {
@@ -31,7 +31,7 @@ async fn simple_select() {
             .map(|c| { c.name() })
             .collect::<Vec<_>>()
     );
-    let val: i64 = res.try_get(0).unwrap();
+    let val: i64 = res.get(0);
     assert_eq!(42, val)
 }
 
@@ -51,7 +51,7 @@ async fn select_with_arg() {
             .map(|c| { c.name() })
             .collect::<Vec<_>>()
     );
-    let val: i64 = res.try_get(0).unwrap();
+    let val: i64 = res.get(0);
     assert_eq!(43, val)
 }
 
@@ -79,7 +79,7 @@ where
             .map(|c| { c.name() })
             .collect::<Vec<_>>()
     );
-    let val: T = res.try_get(0).unwrap();
+    let val: T = res.get(0);
     assert_eq!(v.clone(), val.clone())
 }
 
@@ -158,8 +158,8 @@ async fn fetch_many() {
             .map(|c| { c.name() })
             .collect::<Vec<_>>()
     );
-    let v1: i64 = res1.try_get(0).unwrap();
-    let v2: String = res1.try_get(1).unwrap();
+    let v1: i64 = res1.get(0);
+    let v2: String = res1.get(1);
     assert_eq!((1, "one".to_owned()), (v1, v2));
 
     let (res2, tail) = tail.into_future().await;
@@ -172,8 +172,8 @@ async fn fetch_many() {
             .map(|c| { c.name() })
             .collect::<Vec<_>>()
     );
-    let v1: i64 = res2.try_get(0).unwrap();
-    let v2: String = res2.try_get(1).unwrap();
+    let v1: i64 = res2.get(0);
+    let v2: String = res2.get(1);
     assert_eq!((2, "two".to_owned()), (v1, v2));
 
     let (res_empty, _tail) = tail.into_future().await;
@@ -181,4 +181,31 @@ async fn fetch_many() {
         None => {}
         Some(_) => panic!("Found result where there should be none"),
     }
+}
+
+#[tokio::test]
+async fn transaction_rollback() {
+    let mut conn = test_connection().await;
+    conn.execute("CREATE TABLE test(x INTEGER NOT NULL)");
+    let mut transaction = conn.begin().await.unwrap();
+    transaction.execute("INSERT INTO test(x) VALUES (42)");
+    let res = transaction.fetch_one("SELECT * FROM test").await.unwrap();
+    assert_eq!(res.get::<i64, usize>(0), 42);
+    transaction.rollback().await.unwrap();
+    let res = conn.fetch_optional("SELECT * from test").await.unwrap();
+    match res {
+        None => {}
+        Some(_) => panic!("Found result where there should be none"),
+    }
+}
+
+#[tokio::test]
+async fn transaction_commit() {
+    let mut conn = test_connection().await;
+    conn.execute("CREATE TABLE test(x INTEGER NOT NULL)");
+    let mut transaction = conn.begin().await.unwrap();
+    transaction.execute("INSERT INTO test(x) VALUES (42)");
+    transaction.commit().await.unwrap();
+    let res = conn.fetch_one("SELECT * from test").await.unwrap();
+    assert_eq!(res.get::<i64, usize>(0), 42);
 }

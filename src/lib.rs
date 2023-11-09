@@ -2,6 +2,7 @@ use futures_core::task::Context;
 use futures_core::task::Poll;
 use futures_util::StreamExt;
 use std::cell::RefCell;
+use std::future::pending;
 use std::mem::transmute;
 use std::ops::DerefMut;
 use std::pin::Pin;
@@ -190,23 +191,32 @@ impl TransactionManager for ODBCTransactionManager {
     fn begin(
         conn: &mut <Self::Database as Database>::Connection,
     ) -> BoxFuture<'_, std::result::Result<(), Error>> {
-        todo!()
+        Box::pin(async {
+            let _ = conn.execute("BEGIN").await;
+            Ok(())
+        })
     }
 
     fn commit(
         conn: &mut <Self::Database as Database>::Connection,
     ) -> BoxFuture<'_, std::result::Result<(), Error>> {
-        todo!()
+        Box::pin(async {
+            let _ = conn.execute("COMMIT").await;
+            Ok(())
+        })
     }
 
     fn rollback(
         conn: &mut <Self::Database as Database>::Connection,
     ) -> BoxFuture<'_, std::result::Result<(), Error>> {
-        todo!()
+        Box::pin(async {
+            let _ = conn.execute("ROLLBACK").await;
+            Ok(())
+        })
     }
 
     fn start_rollback(conn: &mut <Self::Database as Database>::Connection) {
-        todo!()
+        let _ = conn.0.execute_polling("ROLLBACK", (), || pending::<()>());
     }
 }
 
@@ -482,15 +492,15 @@ impl Row for ODBCRow {
         let column = self.columns().get(index).unwrap();
         match column.type_info.0 {
             DataType::SmallInt | DataType::Integer => {
-                let mut res: Nullable<i32> = Nullable::null();
+                let res: Nullable<i32> = Nullable::null();
                 get_value(self, index, res).map(|x| x.map(|x| ODBCValue::Int(x)))
             }
             DataType::BigInt => {
-                let mut res: Nullable<i64> = Nullable::null();
+                let res: Nullable<i64> = Nullable::null();
                 get_value(self, index, res).map(|x| x.map(|x| ODBCValue::Int64(x)))
             }
             DataType::Real | DataType::Double | DataType::Float { precision: _ } => {
-                let mut res: Nullable<f64> = Nullable::null();
+                let res: Nullable<f64> = Nullable::null();
                 get_value(self, index, res).map(|x| x.map(|x| ODBCValue::Double(x)))
             }
             DataType::Char { length: _ }
@@ -654,7 +664,7 @@ impl<'c> Executor<'c> for &'c mut ODBCConnection {
 
     fn fetch_optional<'e, 'q: 'e, E: 'q>(
         self,
-        mut query: E,
+        query: E,
     ) -> futures_core::future::BoxFuture<
         'e,
         std::result::Result<Option<<Self::Database as Database>::Row>, Error>,
@@ -664,6 +674,7 @@ impl<'c> Executor<'c> for &'c mut ODBCConnection {
         E: executor::Execute<'q, Self::Database>,
     {
         Box::pin(async {
+            // TODO: Fail if more than 1 result
             match self.fetch_many(query).next().await {
                 None => Ok(None),
                 Some(Ok(Either::Left(res))) => todo!(),
